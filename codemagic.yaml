@@ -1,36 +1,41 @@
 workflows:
-  ios-browserstack:
-    name: iOS build for BrowserStack
+  ios-simulator:
+    name: iOS Simulator Build for Testing
     max_build_duration: 60
     environment:
       flutter: stable
       xcode: latest
     scripts:
-      # Step 1: Prepare Flutter
-      - name: Flutter clean & get deps
+      - name: Flutter clean & get dependencies
         script: |
           flutter clean
           flutter pub get
 
-      # Step 2: Build iOS app (no signing, for real devices)
-      - name: Build iOS release (no signing)
+      - name: Install CocoaPods
         script: |
-          flutter build ios --release --no-codesign
+          cd ios
+          pod repo update
+          pod install --verbose
+          cd ..
 
-      # Step 3: Archive and export IPA
-      - name: Create IPA
+      - name: Build for iOS Simulator
         script: |
-          xcodebuild -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -sdk iphoneos \
-            -configuration Release \
-            archive -archivePath $CM_BUILD_DIR/Runner.xcarchive \
-            CODE_SIGNING_ALLOWED=NO
+          # Build specifically for simulator (no code signing needed)
+          flutter build ios --simulator --debug --verbose
+          
+          # Verify the .app was created
+          ls -la build/ios/iphonesimulator/
+          
+          # Create zip for easier upload
+          cd build/ios/iphonesimulator/
+          zip -r Runner-simulator.zip Runner.app/
+          
+          # Also create IPA-like structure that some platforms expect
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r Runner-simulator.ipa Payload/
 
-          # Use exportOptions.plist in ios/
-          xcodebuild -exportArchive \
-            -archivePath $CM_BUILD_DIR/Runner.xcarchive \
-            -exportOptionsPlist ios/exportOptions.plist \
-            -exportPath $CM_BUILD_DIR
     artifacts:
-      - $CM_BUILD_DIR/*.ipa
+      - build/ios/iphonesimulator/Runner.app/**/*
+      - build/ios/iphonesimulator/Runner-simulator.zip
+      - build/ios/iphonesimulator/Runner-simulator.ipa
