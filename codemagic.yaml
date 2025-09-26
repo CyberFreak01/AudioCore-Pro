@@ -1,10 +1,24 @@
 workflows:
-  ios-app:
-    name: iOS App
+  ios-browserstack:
+    name: iOS build for BrowserStack
+    max_build_duration: 60
     environment:
+      flutter: stable
       xcode: latest
     scripts:
-      - name: Build ipa
+      # Step 1: Prepare Flutter
+      - name: Flutter clean & get deps
+        script: |
+          flutter clean
+          flutter pub get
+
+      # Step 2: Build iOS app (no signing, for real devices)
+      - name: Build iOS release (no signing)
+        script: |
+          flutter build ios --release --no-codesign
+
+      # Step 3: Archive and export IPA
+      - name: Create IPA
         script: |
           xcodebuild -workspace ios/Runner.xcworkspace \
             -scheme Runner \
@@ -12,7 +26,11 @@ workflows:
             -configuration Release \
             archive -archivePath $CM_BUILD_DIR/Runner.xcarchive \
             CODE_SIGNING_ALLOWED=NO
+
+          # Use exportOptions.plist in ios/
           xcodebuild -exportArchive \
             -archivePath $CM_BUILD_DIR/Runner.xcarchive \
             -exportOptionsPlist ios/exportOptions.plist \
             -exportPath $CM_BUILD_DIR
+    artifacts:
+      - $CM_BUILD_DIR/*.ipa
