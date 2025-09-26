@@ -28,38 +28,38 @@ import AVFoundation
         }
         do {
           try AudioManager.shared.startRecording(sessionId: sessionId, sampleRate: sampleRate)
-          result(nil)
+          result(true)
         } catch {
           result(FlutterError(code: "START_ERROR", message: error.localizedDescription, details: nil))
         }
       case "stopRecording":
         AudioManager.shared.stopRecording()
-        result(nil)
+        result(true)
       case "pauseRecording":
         AudioManager.shared.pauseRecording()
-        result(nil)
+        result(true)
       case "resumeRecording":
         AudioManager.shared.resumeRecording()
-        result(nil)
+        result(true)
       case "setGain":
         let gain = args?["gain"] as? Double ?? 1.0
         AudioManager.shared.setGain(gain)
-        result(nil)
+        result(true)
       case "getGain":
         result(AudioManager.shared.getGain())
       case "listPendingSessions":
         result(AudioManager.shared.listPendingSessions())
       case "rescanPending":
         if let sid = args?["sessionId"] as? String { AudioManager.shared.rescanPending(sessionId: sid) }
-        result(nil)
+        result(true)
       case "markChunkUploaded":
         if let sid = args?["sessionId"] as? String, let num = args?["chunkNumber"] as? Int { AudioManager.shared.markChunkUploaded(sessionId: sid, chunkNumber: num) }
-        result(nil)
+        result(true)
       case "getLastActiveSessionId":
         result(AudioManager.shared.getLastActiveSessionId())
       case "clearLastActiveSession":
         AudioManager.shared.clearLastActiveSession()
-        result(nil)
+        result(true)
       default:
         result(FlutterMethodNotImplemented)
       }
