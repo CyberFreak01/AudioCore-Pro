@@ -40,7 +40,7 @@ class AudioManager: NSObject {
   }
 
   func requestPermission(completion: @escaping (Bool) -> Void) {
-    AVAudioApplication.requestRecordPermission { granted in
+    AVAudioSession.sharedInstance().requestRecordPermission { granted in
       completion(granted)
       if granted {
         self.eventSink?(["type": "permission_granted", "permission": "microphone"]) 
