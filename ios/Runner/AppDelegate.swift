@@ -11,8 +11,15 @@ import AVFoundation
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
-
-    let controller : FlutterViewController = window?.rootViewController as! FlutterViewController
+    
+    // Initialize Flutter engine first
+    let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    
+    // Setup platform channels after Flutter is initialized
+    guard let controller = window?.rootViewController as? FlutterViewController else {
+      print("Failed to get FlutterViewController")
+      return result
+    }
 
     let methodChannel = FlutterMethodChannel(name: "medical_transcription/audio",
                                              binaryMessenger: controller.binaryMessenger)
@@ -70,7 +77,7 @@ import AVFoundation
     eventChannel.setStreamHandler(self)
     AudioManager.shared.setEventSink(self.eventSink)
 
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    return result
   }
 }
 
