@@ -12,6 +12,39 @@ class PersistentQueue {
         openDatabase()
         createTables()
     }
+
+    // MARK: - Integrity Check & Repair
+    private func checkAndRepairIfCorrupt() {
+        let checkSQL = "PRAGMA quick_check;"
+        var stmt: OpaquePointer?
+        var isCorrupt = false
+        if sqlite3_prepare_v2(db, checkSQL, -1, &stmt, nil) == SQLITE_OK {
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                if let cStr = sqlite3_column_text(stmt, 0) {
+                    let result = String(cString: cStr)
+                    if result.lowercased() != "ok" {
+                        isCorrupt = true
+                        print("PersistentQueue: SQLite quick_check reported: \(result)")
+                    }
+                }
+            }
+        }
+        sqlite3_finalize(stmt)
+        
+        if isCorrupt {
+            // Close, delete DB file, and recreate fresh
+            print("PersistentQueue: Detected DB corruption. Recreating database...")
+            closeDatabase()
+            do { try FileManager.default.removeItem(atPath: dbPath) } catch {
+                print("PersistentQueue: Failed deleting corrupt DB: \(error)")
+            }
+            if sqlite3_open(dbPath, &db) == SQLITE_OK {
+                createTables()
+            } else {
+                print("PersistentQueue: Failed to reopen DB after deletion")
+            }
+        }
+    }
     
     deinit {
         closeDatabase()
@@ -22,6 +55,10 @@ class PersistentQueue {
         if sqlite3_open(dbPath, &db) != SQLITE_OK {
             print("PersistentQueue: Unable to open database at \(dbPath)")
             db = nil
+        }
+        // Run integrity check and attempt auto-repair if needed
+        if db != nil {
+            checkAndRepairIfCorrupt()
         }
     }
     

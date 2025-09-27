@@ -215,12 +215,7 @@ class AudioManager: NSObject {
 
     let input = audioEngine.inputNode
     let format = input.inputFormat(forBus: 0)
-    
-    // Use the input format directly to avoid conversion issues
-    let recordingFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, 
-                                       sampleRate: format.sampleRate, 
-                                       channels: format.channelCount, 
-                                       interleaved: false)!
+    print("AudioManager: Input format sr=\(format.sampleRate) ch=\(format.channelCount) interleaved=\(format.isInterleaved) common=\(format.commonFormat.rawValue)")
 
     input.removeTap(onBus: 0)
     input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, time in
@@ -232,7 +227,9 @@ class AudioManager: NSObject {
           print("AudioManager: Input buffer has no frames")
           return
         }
-
+        if self.currentChunkFrames == 0 {
+          print("AudioManager: Received first audio buffer: frames=\(buffer.frameLength)")
+        }
         // Apply gain and compute levels directly on input buffer
         self.applyGainAndLevelsFloat(buffer)
         
@@ -241,13 +238,15 @@ class AudioManager: NSObject {
 
         // Rotate file if needed
         if self.fileWriter == nil || self.currentChunkFrames >= self.framesPerChunk {
-          self.rotateChunkFileFloat(format: recordingFormat)
+          print("AudioManager: Rotating chunk file. chunk=\(self.chunkNumber)")
+          self.rotateChunkFileFloat(format: format)
         }
 
         do {
           try self.fileWriter?.write(from: buffer)
           self.currentChunkFrames += buffer.frameLength
           if self.currentChunkFrames >= self.framesPerChunk {
+            print("AudioManager: Finishing chunk \(self.chunkNumber) with frames=\(self.currentChunkFrames)")
             self.finishCurrentChunkAndEmit()
           }
         } catch {

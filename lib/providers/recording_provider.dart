@@ -127,24 +127,66 @@ class RecordingProvider extends ChangeNotifier {
     debugPrint('Permission granted: $permission');
     
     // Clear any permission-related errors
-    if (_errorMessage?.contains('permission') == true) {
       _errorMessage = null;
       notifyListeners();
     }
   }
 
-  /// Handle new audio chunk from native platform (now handled natively)
+  /// Handle new audio chunk from native platform: upload via SessionService
   Future<void> _handleChunkReady(Map event) async {
-    // Chunk handling is now done entirely in native code
-    // This method is kept for compatibility but does nothing
-    debugPrint('Chunk ready event received - handled natively');
-  }
+    try {
+      final sid = event['sessionId'] as String?;
+      final chunkNum = (event['chunkNumber'] as num?)?.toInt();
+      final filePath = event['filePath'] as String?;
+      final checksum = event['checksum'] as String?;
+      if (sid == null || chunkNum == null || filePath == null) {
+        debugPrint('Chunk ready event missing data: $event');
+        return;
+      }
 
-  /// Handle list of pending chunks from native (rescanPending) - now handled natively
-  Future<void> _handlePendingChunks(Map event) async {
-    // Chunk uploads are now handled entirely in native code
-    // This method is kept for compatibility but does nothing
-    debugPrint('Pending chunks event received - handled natively');
+      if (_sessionService == null) {
+        debugPrint('SessionService not initialized, cannot upload chunk');
+        return;
+      }
+
+      final file = File(filePath);
+      if (!await file.exists()) {
+        debugPrint('Chunk file does not exist: $filePath');
+        return;
+      }
+
+      debugPrint('Uploading chunk $chunkNum for session $sid from $filePath');
+      final ok = await _sessionService!.uploadChunk(sid, chunkNum, file);
+      if (!ok) {
+        debugPrint('Upload failed for chunk $chunkNum, will rely on native retry');
+        return;
+      }
+
+      // Optionally notify server of uploaded chunk
+      try {
+        await _sessionService!.notifyChunkUploaded(sid, chunkNum, checksum: checksum);
+      } catch (_) {}
+
+      // Notify native to mark the chunk as uploaded and clean up file + queue
+      try {
+        await _platform.invokeMethod('markChunkUploaded', {
+          'sessionId': sid,
+          'chunkNumber': chunkNum,
+        });
+      } catch (e) {
+        debugPrint('Failed to notify native of uploaded chunk: $e');
+      }
+
+      // Update UI counters
+      _uploadedChunks.add('chunk_$chunkNum');
+      if (chunkNum + 1 > _chunkCounter) {
+        _chunkCounter = chunkNum + 1;
+      }
+      notifyListeners();
+      debugPrint('Chunk $chunkNum uploaded and marked as complete');
+    } catch (e) {
+      debugPrint('Error handling chunk_ready: $e');
+    }
   }
 
   /// Trigger rescan on network available
