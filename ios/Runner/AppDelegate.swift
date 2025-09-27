@@ -78,18 +78,6 @@ import BackgroundTasks
         result(true)
       case "getGain":
         result(AudioManager.shared.getGain())
-      case "setServerUrl":
-        if let url = args?["url"] as? String {
-          AudioManager.shared.setServerUrl(url)
-          result(true)
-        } else {
-          result(FlutterError(code: "ARG_ERROR", message: "Missing url", details: nil))
-        }
-      case "forceResumeProcessing":
-        ChunkManager.shared.forceResumeProcessing()
-        result(true)
-      case "getQueueStatus":
-        result(ChunkManager.shared.getQueueStatus())
       case "listPendingSessions":
         result(AudioManager.shared.listPendingSessions())
       case "rescanPending":

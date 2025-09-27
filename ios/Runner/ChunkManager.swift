@@ -36,41 +36,6 @@ struct AudioChunk {
             self.checksum = ""
         }
     }
-
-    // MARK: - Public API (for Flutter method channel)
-    func forceResumeProcessing() {
-        processingQueue.async { [weak self] in
-            self?.processUploadQueue()
-        }
-    }
-
-    func getQueueStatus() -> [String: Any] {
-        var total = 0
-        var uploaded = 0
-        var pending = 0
-        var failed = 0
-        var totalSize: Int64 = 0
-
-        for c in uploadQueue {
-            total += 1
-            totalSize += c.fileSize
-            switch c.uploadStatus {
-            case .uploaded: uploaded += 1
-            case .pending, .retrying: pending += 1
-            case .failed: failed += 1
-            default: break
-            }
-        }
-
-        return [
-            "totalChunks": total,
-            "uploadedChunks": uploaded,
-            "pendingChunks": pending,
-            "failedChunks": failed,
-            "totalSize": totalSize,
-            "sessions": getPendingSessions()
-        ]
-    }
 }
 
 enum ChunkUploadStatus: String, CaseIterable {
