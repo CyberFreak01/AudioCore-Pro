@@ -49,6 +49,12 @@ class RecordingProvider extends ChangeNotifier {
     _recoverLastSessionPending();
   }
 
+  /// Handle list of pending chunks from native (compat placeholder)
+  Future<void> _handlePendingChunks(Map event) async {
+    // Native handles retry/resume; this remains for compatibility/logging
+    debugPrint('Pending chunks event received: $event');
+  }
+
   /// Set up event listener for audio chunks
   void _setupEventListener() {
     _eventSubscription = _eventChannel.receiveBroadcastStream().listen(
@@ -127,6 +133,7 @@ class RecordingProvider extends ChangeNotifier {
     debugPrint('Permission granted: $permission');
     
     // Clear any permission-related errors
+    if (_errorMessage?.contains('permission') == true) {
       _errorMessage = null;
       notifyListeners();
     }
@@ -379,14 +386,16 @@ class RecordingProvider extends ChangeNotifier {
     return _gain;
   }
 
-  /// Configure server URL for native uploads
-  Future<void> setServerUrl(String url) async {
-    try {
-      await _platform.invokeMethod('setServerUrl', {'url': url});
-      debugPrint('Server URL configured: $url');
-    } catch (e) {
-      debugPrint('Failed to set server URL: $e');
-    }
+  /// Configure server URL for native uploads (fire-and-forget)
+  void setServerUrl(String url) {
+    unawaited(() async {
+      try {
+        await _platform.invokeMethod('setServerUrl', {'url': url});
+        debugPrint('Server URL configured: $url');
+      } catch (e) {
+        debugPrint('Failed to set server URL: $e');
+      }
+    }());
   }
 
   /// Force resume chunk processing (useful after network issues)
