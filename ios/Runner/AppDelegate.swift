@@ -100,9 +100,6 @@ import BackgroundTasks
       case "getQueueStats":
         let chunkManager = ChunkManager.shared
         result(chunkManager.getPendingSessions())
-      case "runIntegrationTests":
-        AudioManager.shared.runIntegrationTests()
-        result(true)
       default:
         result(FlutterMethodNotImplemented)
       }
