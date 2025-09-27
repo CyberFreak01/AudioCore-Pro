@@ -44,6 +44,7 @@ import BackgroundTasks
     }
     print("AppDelegate: Successfully got FlutterViewController")
 
+    // Setup medical transcription audio channel
     let methodChannel = FlutterMethodChannel(name: "medical_transcription/audio",
                                              binaryMessenger: controller.binaryMessenger)
     methodChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
@@ -100,6 +101,23 @@ import BackgroundTasks
       case "getQueueStats":
         let chunkManager = ChunkManager.shared
         result(chunkManager.getPendingSessions())
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    // Setup MicService channel
+    let micServiceChannel = FlutterMethodChannel(name: "com.example.mediascribe.micService",
+                                                 binaryMessenger: controller.binaryMessenger)
+    micServiceChannel.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+      guard let _ = self else { return }
+      switch call.method {
+      case "startMic":
+        // For now, just return success - this can be expanded later if needed
+        result(true)
+      case "stopMic":
+        // For now, just return success - this can be expanded later if needed
+        result(true)
       default:
         result(FlutterMethodNotImplemented)
       }

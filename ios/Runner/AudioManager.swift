@@ -758,5 +758,3 @@ class CircularBuffer<T> {
     count = 0
   }
 }
-
-
