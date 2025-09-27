@@ -177,10 +177,9 @@ class ChunkManager: NSObject {
     }
 
     private func startQueueProcessing() {
-        // Kick off initial processing and ensure background tasks are registered
+        // Kick off initial processing
         processingQueue.async { [weak self] in
             self?.processUploadQueue()
-            self?.setupBackgroundTasks()
         }
     }
 
@@ -195,9 +194,6 @@ class ChunkManager: NSObject {
         networkMonitor.startMonitoring()
     }
     
-    private func setupBackgroundTasks() {
-        backgroundTaskManager.registerBackgroundTasks()
-    }
     
     private func processUploadQueue() {
         guard networkMonitor.isNetworkAvailable else { return }

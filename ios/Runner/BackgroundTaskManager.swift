@@ -23,23 +23,36 @@ class BackgroundTaskManager: NSObject {
     func registerBackgroundTasks() {
         // Avoid asserting by attempting to register more than once
         guard !didRegisterTasks else {
+            print("BackgroundTaskManager: Tasks already registered, skipping")
             return
         }
-        // Register background app refresh task for audio uploads
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: audioUploadTaskId, using: nil) { task in
-            self.handleAudioUploadTask(task as! BGAppRefreshTask)
+        
+        // Only register if iOS 13+ is available
+        if #available(iOS 13.0, *) {
+            // Register background app refresh task for audio uploads
+            BGTaskScheduler.shared.register(forTaskWithIdentifier: audioUploadTaskId, using: nil) { task in
+                self.handleAudioUploadTask(task as! BGAppRefreshTask)
+            }
+            
+            // Register background processing task for chunk retry
+            BGTaskScheduler.shared.register(forTaskWithIdentifier: chunkRetryTaskId, using: nil) { task in
+                self.handleChunkRetryTask(task as! BGProcessingTask)
+            }
+            
+            print("BackgroundTaskManager: Registered background tasks")
+        } else {
+            print("BackgroundTaskManager: BGTaskScheduler not available on iOS < 13.0")
         }
         
-        // Register background processing task for chunk retry
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: chunkRetryTaskId, using: nil) { task in
-            self.handleChunkRetryTask(task as! BGProcessingTask)
-        }
-        
-        print("BackgroundTaskManager: Registered background tasks")
         didRegisterTasks = true
     }
     
     func scheduleAudioUploadTask() {
+        guard #available(iOS 13.0, *) else {
+            print("BackgroundTaskManager: BGTaskScheduler not available for scheduling")
+            return
+        }
+        
         let request = BGAppRefreshTaskRequest(identifier: audioUploadTaskId)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60) // 15 minutes from now
         
@@ -52,6 +65,11 @@ class BackgroundTaskManager: NSObject {
     }
     
     func scheduleChunkRetryTask() {
+        guard #available(iOS 13.0, *) else {
+            print("BackgroundTaskManager: BGTaskScheduler not available for scheduling")
+            return
+        }
+        
         let request = BGProcessingTaskRequest(identifier: chunkRetryTaskId)
         request.earliestBeginDate = Date(timeIntervalSinceNow: 5 * 60) // 5 minutes from now
         request.requiresNetworkConnectivity = true
@@ -136,8 +154,10 @@ class BackgroundTaskManager: NSObject {
         print("BackgroundTaskManager: App will enter foreground")
         
         // Cancel scheduled background tasks since app is becoming active
-        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: audioUploadTaskId)
-        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: chunkRetryTaskId)
+        if #available(iOS 13.0, *) {
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: audioUploadTaskId)
+            BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: chunkRetryTaskId)
+        }
         
         // End background task
         endBackgroundTask()
