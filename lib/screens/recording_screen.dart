@@ -6,9 +6,10 @@
   class RecordingScreen extends StatelessWidget {
     const RecordingScreen({super.key});
   
-    @override
-    Widget build(BuildContext context) {
-      return Scaffold(
+  @override
+  Widget build(BuildContext context) {
+    print('Flutter: Building RecordingScreen');
+    return Scaffold(
         appBar: AppBar(
           title: const Text('Medical Transcription'),
           backgroundColor: Colors.blue[600],

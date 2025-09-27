@@ -5,6 +5,7 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
+      cocoapods: default
     scripts:
       - name: Flutter clean & get dependencies
         script: |
@@ -14,7 +15,6 @@ workflows:
       - name: Install CocoaPods
         script: |
           cd ios
-          pod repo update
           pod install --verbose
           cd ..
 
@@ -23,19 +23,53 @@ workflows:
           # Build specifically for simulator (no code signing needed)
           flutter build ios --simulator --debug --verbose
           
-          # Verify the .app was created
+          # Verify the .app was created and check its contents
           ls -la build/ios/iphonesimulator/
+          ls -la build/ios/iphonesimulator/Runner.app/
+          
+          # Check if Flutter framework is embedded
+          ls -la build/ios/iphonesimulator/Runner.app/Frameworks/
           
           # Create zip for easier upload
           cd build/ios/iphonesimulator/
           zip -r Runner-simulator.zip Runner.app/
-          
-          # Also create IPA-like structure that some platforms expect
-          mkdir Payload
-          cp -r Runner.app Payload/
-          zip -r Runner-simulator.ipa Payload/
 
     artifacts:
       - build/ios/iphonesimulator/Runner.app/**/*
       - build/ios/iphonesimulator/Runner-simulator.zip
-      - build/ios/iphonesimulator/Runner-simulator.ipa
+
+  ios-device:
+    name: iOS Device Build
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Flutter clean & get dependencies
+        script: |
+          flutter clean
+          flutter pub get
+          flutter pub deps
+
+      - name: Install CocoaPods
+        script: |
+          cd ios
+          pod repo update
+          pod install --verbose
+          cd ..
+
+      - name: Build for iOS Device
+        script: |
+          # Build for device
+          flutter build ios --release --verbose
+          
+          # Verify the .app was created
+          ls -la build/ios/iphoneos/
+          ls -la build/ios/iphoneos/Runner.app/
+          
+          # Check if Flutter framework is embedded
+          ls -la build/ios/iphoneos/Runner.app/Frameworks/
+
+    artifacts:
+      - build/ios/iphoneos/Runner.app/**/*

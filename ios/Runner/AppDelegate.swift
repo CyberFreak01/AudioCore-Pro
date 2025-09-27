@@ -10,16 +10,34 @@ import AVFoundation
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    print("AppDelegate: Starting application launch")
+    print("AppDelegate: Flutter framework available: \(FlutterEngine.self)")
     GeneratedPluginRegistrant.register(with: self)
+    print("AppDelegate: Plugin registrant registered")
     
     // Initialize Flutter engine first
     let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    print("AppDelegate: Super application call completed, result: \(result)")
+    
+    // Add a small delay to ensure Flutter engine is fully initialized
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+      self.setupPlatformChannels()
+    }
+    
+    return result
+  }
+  
+  private func setupPlatformChannels() {
+    print("AppDelegate: Setting up platform channels")
     
     // Setup platform channels after Flutter is initialized
     guard let controller = window?.rootViewController as? FlutterViewController else {
-      print("Failed to get FlutterViewController")
-      return result
+      print("AppDelegate: Failed to get FlutterViewController")
+      print("AppDelegate: Window: \(String(describing: window))")
+      print("AppDelegate: RootViewController: \(String(describing: window?.rootViewController))")
+      return
     }
+    print("AppDelegate: Successfully got FlutterViewController")
 
     let methodChannel = FlutterMethodChannel(name: "medical_transcription/audio",
                                              binaryMessenger: controller.binaryMessenger)
@@ -76,8 +94,14 @@ import AVFoundation
                                            binaryMessenger: controller.binaryMessenger)
     eventChannel.setStreamHandler(self)
     AudioManager.shared.setEventSink(self.eventSink)
-
-    return result
+    
+    // Test Flutter engine by calling a simple method
+    let testChannel = FlutterMethodChannel(name: "test_channel", binaryMessenger: controller.binaryMessenger)
+    testChannel.invokeMethod("test", arguments: nil) { result in
+      print("AppDelegate: Flutter engine test result: \(String(describing: result))")
+    }
+    
+    print("AppDelegate: Platform channels setup completed")
   }
 }
 

@@ -5,6 +5,7 @@ import 'providers/recording_provider.dart';
 import 'screens/recording_screen.dart';
 
 void main() {
+  print('Flutter: Starting app');
   runApp(const MedicalTranscriptionApp());
 }
 
@@ -13,6 +14,7 @@ class MedicalTranscriptionApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    print('Flutter: Building MedicalTranscriptionApp');
     return MultiProvider(
       providers: [
         Provider(create: (_) => SessionService('http://192.168.137.1:3000')),
