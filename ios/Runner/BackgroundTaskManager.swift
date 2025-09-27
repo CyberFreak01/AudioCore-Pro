@@ -12,6 +12,7 @@ class BackgroundTaskManager: NSObject {
     // Background task tracking
     private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
     private var isBackgroundTaskActive = false
+    private var didRegisterTasks = false
     
     override init() {
         super.init()
@@ -20,6 +21,10 @@ class BackgroundTaskManager: NSObject {
     
     // MARK: - Public Interface
     func registerBackgroundTasks() {
+        // Avoid asserting by attempting to register more than once
+        guard !didRegisterTasks else {
+            return
+        }
         // Register background app refresh task for audio uploads
         BGTaskScheduler.shared.register(forTaskWithIdentifier: audioUploadTaskId, using: nil) { task in
             self.handleAudioUploadTask(task as! BGAppRefreshTask)
@@ -31,6 +36,7 @@ class BackgroundTaskManager: NSObject {
         }
         
         print("BackgroundTaskManager: Registered background tasks")
+        didRegisterTasks = true
     }
     
     func scheduleAudioUploadTask() {
