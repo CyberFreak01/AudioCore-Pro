@@ -153,7 +153,7 @@ class BackgroundTaskManager: NSObject {
             print("BackgroundTaskManager: Low background time, preparing for termination")
             
             // Notify audio manager to save state
-            NotificationCenter.default.post(name: .backgroundTimeExpiring, object: nil)
+            NotificationCenter.default.post(name: NSNotification.Name("backgroundTimeExpiring"), object: nil)
             
             // Schedule a final background task
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
@@ -226,7 +226,3 @@ class BackgroundTaskManager: NSObject {
     }
 }
 
-// MARK: - Notification Names
-extension Notification.Name {
-    static let backgroundTimeExpiring = Notification.Name("backgroundTimeExpiring")
-}

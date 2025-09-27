@@ -35,7 +35,7 @@ class AudioManager: NSObject {
   private let networkMonitor = NetworkMonitor()
   
   // Audio session management
-  private var audioSessionInterrupted = false
+  private var isAudioSessionInterrupted = false
   private var wasRecordingBeforeInterruption = false
   
   // Call handling
@@ -173,14 +173,14 @@ class AudioManager: NSObject {
     notificationCenter.addObserver(
       self,
       selector: #selector(backgroundTimeExpiring),
-      name: .backgroundTimeExpiring,
+      name: NSNotification.Name("backgroundTimeExpiring"),
       object: nil
     )
     
     notificationCenter.addObserver(
       self,
       selector: #selector(chunkReadyForUpload),
-      name: .chunkReadyForUpload,
+      name: NSNotification.Name("chunkReadyForUpload"),
       object: nil
     )
   }
@@ -321,6 +321,10 @@ class AudioManager: NSObject {
   }
 
   func getGain() -> Double { Double(gain) }
+  
+  // Expose recording state for external access
+  var isCurrentlyRecording: Bool { return isRecording }
+  var isCurrentlyPaused: Bool { return isPaused }
 
   // Pending queue management
   func listPendingSessions() -> [[String: Any]] { 
@@ -463,7 +467,7 @@ class AudioManager: NSObject {
     switch type {
     case .began:
       print("AudioManager: Audio session interrupted")
-      audioSessionInterrupted = true
+      isAudioSessionInterrupted = true
       wasRecordingBeforeInterruption = isRecording
       
       if isRecording {
@@ -473,7 +477,7 @@ class AudioManager: NSObject {
       
     case .ended:
       print("AudioManager: Audio session interruption ended")
-      audioSessionInterrupted = false
+      isAudioSessionInterrupted = false
       
       if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
         let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
@@ -643,7 +647,7 @@ extension AudioManager: CXCallObserverDelegate {
 
 // MARK: - CircularBuffer
 class CircularBuffer<T> {
-  private var buffer: [T]
+  private var buffer: [T?]
   private var head = 0
   private var tail = 0
   private var count = 0
@@ -651,7 +655,7 @@ class CircularBuffer<T> {
   
   init(capacity: Int) {
     self.capacity = capacity
-    self.buffer = Array<T?>(repeating: nil, count: capacity) as! [T]
+    self.buffer = Array<T?>(repeating: nil, count: capacity)
   }
   
   func write(_ element: T) {
@@ -669,6 +673,7 @@ class CircularBuffer<T> {
     guard count > 0 else { return nil }
     
     let element = buffer[head]
+    buffer[head] = nil
     head = (head + 1) % capacity
     count -= 1
     
@@ -684,6 +689,9 @@ class CircularBuffer<T> {
   }
   
   func clear() {
+    for i in 0..<capacity {
+      buffer[i] = nil
+    }
     head = 0
     tail = 0
     count = 0

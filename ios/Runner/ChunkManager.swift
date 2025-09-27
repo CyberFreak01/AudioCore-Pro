@@ -1,5 +1,5 @@
 import Foundation
-import CryptoKit
+import CommonCrypto
 
 // MARK: - Chunk Data Models
 struct AudioChunk {
@@ -30,7 +30,7 @@ struct AudioChunk {
         let url = URL(fileURLWithPath: filePath)
         if let data = try? Data(contentsOf: url) {
             self.fileSize = Int64(data.count)
-            self.checksum = SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }.joined()
+            self.checksum = data.sha256()
         } else {
             self.fileSize = 0
             self.checksum = ""
@@ -229,7 +229,7 @@ class ChunkManager: NSObject {
         
         // Emit chunk ready event to Flutter for actual upload
         DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .chunkReadyForUpload, object: nil, userInfo: [
+            NotificationCenter.default.post(name: NSNotification.Name("chunkReadyForUpload"), object: nil, userInfo: [
                 "sessionId": chunk.sessionId,
                 "chunkNumber": chunk.chunkNumber,
                 "filePath": chunk.filePath,
@@ -269,7 +269,7 @@ class ChunkManager: NSObject {
         // Verify checksum
         do {
             let data = try Data(contentsOf: url)
-            let actualChecksum = SHA256.hash(data: data).compactMap { String(format: "%02x", $0) }.joined()
+            let actualChecksum = data.sha256()
             guard actualChecksum == chunk.checksum else {
                 print("ChunkManager: Checksum mismatch. Expected: \(chunk.checksum), Actual: \(actualChecksum)")
                 return false
@@ -310,7 +310,13 @@ class ChunkManager: NSObject {
     }
 }
 
-// MARK: - Notification Names
-extension Notification.Name {
-    static let chunkReadyForUpload = Notification.Name("chunkReadyForUpload")
+// MARK: - Data Extension for SHA256
+extension Data {
+    func sha256() -> String {
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        self.withUnsafeBytes {
+            _ = CC_SHA256($0.baseAddress, CC_LONG(self.count), &hash)
+        }
+        return hash.map { String(format: "%02x", $0) }.joined()
+    }
 }

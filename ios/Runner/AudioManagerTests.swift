@@ -79,18 +79,18 @@ class AudioManagerTestHelper {
         do {
             // Test start recording
             try AudioManager.shared.startRecording(sessionId: testSessionId, sampleRate: 44100.0, secondsPerChunk: 2.0)
-            let isRecording = AudioManager.shared.isRecording
+            let isRecording = AudioManager.shared.isCurrentlyRecording
             
             // Test pause/resume
             AudioManager.shared.pauseRecording()
-            let isPaused = AudioManager.shared.isPaused
+            let isPaused = AudioManager.shared.isCurrentlyPaused
             
             AudioManager.shared.resumeRecording()
-            let isResumed = !AudioManager.shared.isPaused && AudioManager.shared.isRecording
+            let isResumed = !AudioManager.shared.isCurrentlyPaused && AudioManager.shared.isCurrentlyRecording
             
             // Test stop
             AudioManager.shared.stopRecording()
-            let isStopped = !AudioManager.shared.isRecording
+            let isStopped = !AudioManager.shared.isCurrentlyRecording
             
             logTest("Recording Lifecycle", 
                    passed: isRecording && isPaused && isResumed && isStopped,
