@@ -17,7 +17,7 @@ class MedicalTranscriptionApp extends StatelessWidget {
     print('Flutter: Building MedicalTranscriptionApp');
     return MultiProvider(
       providers: [
-        Provider(create: (_) => SessionService('http://192.168.137.1:3000')),
+        Provider(create: (_) => SessionService('https://scribe-server-yu9q.onrender.com/')),
         ChangeNotifierProxyProvider<SessionService, RecordingProvider>(
           create: (_) => RecordingProvider(),
           update: (_, sessionService, recordingProvider) {
