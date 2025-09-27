@@ -220,19 +220,42 @@ class AudioManager: NSObject {
     let converter = AVAudioConverter(from: format, to: desiredFormat)!
 
     input.removeTap(onBus: 0)
-    input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, time in
+    input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, time in
       guard let self = self, self.isRecording, !self.isPaused else { return }
 
       self.processingQueue.async {
-        let frameCapacity = AVAudioFrameCount(self.framesPerChunk - self.currentChunkFrames)
-        let pcmBuffer = AVAudioPCMBuffer(pcmFormat: desiredFormat, frameCapacity: buffer.frameLength)!
+        // Calculate safe buffer capacity - ensure we have enough space for conversion
+        let inputFrames = buffer.frameLength
+        let outputFrames = AVAudioFrameCount(Double(inputFrames) * (desiredFormat.sampleRate / format.sampleRate))
+        let safeCapacity = max(inputFrames, outputFrames) + 1024 // Add safety margin
+        
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: desiredFormat, frameCapacity: safeCapacity) else {
+          print("AudioManager: Failed to create PCM buffer with capacity \(safeCapacity)")
+          return
+        }
+        
         var error: NSError?
         let inputBlock: AVAudioConverterInputBlock = { inNumPackets, outStatus in
           outStatus.pointee = .haveData
           return buffer
         }
-        converter.convert(to: pcmBuffer, error: &error, withInputFrom: inputBlock)
-        if let _ = error { return }
+        
+        let status = converter.convert(to: pcmBuffer, error: &error, withInputFrom: inputBlock)
+        if let error = error {
+          print("AudioManager: Audio conversion error: \(error)")
+          return
+        }
+        
+        if status != .haveData {
+          print("AudioManager: Audio conversion status: \(status)")
+          return
+        }
+        
+        // Ensure the buffer has valid frame length
+        guard pcmBuffer.frameLength > 0 else {
+          print("AudioManager: PCM buffer has no frames")
+          return
+        }
 
         // Apply gain and compute levels
         self.applyGainAndLevels(pcmBuffer)
@@ -409,11 +432,16 @@ class AudioManager: NSObject {
   private func applyGainAndLevels(_ buffer: AVAudioPCMBuffer) {
     guard let channelData = buffer.int16ChannelData else { return }
     let frameLength = Int(buffer.frameLength)
+    let channelCount = Int(buffer.format.channelCount)
+    
+    // Safety check - ensure we don't exceed buffer capacity
+    guard frameLength > 0 && channelCount > 0 else { return }
+    
     var peak: Int16 = 0
     var sumSquares: Float = 0
     let gainValue = gain
 
-    for ch in 0..<Int(buffer.format.channelCount) {
+    for ch in 0..<channelCount {
       let ptr = channelData[ch]
       for i in 0..<frameLength {
         let sample = Float(ptr[i]) * gainValue
@@ -426,7 +454,9 @@ class AudioManager: NSObject {
         sumSquares += norm * norm
       }
     }
-    let meanSquare = sumSquares / Float(frameLength)
+    
+    // Avoid division by zero
+    let meanSquare = frameLength > 0 ? sumSquares / Float(frameLength * channelCount) : 0
     let rms = sqrtf(meanSquare)
     lastRMS = 20.0 * log10f(max(rms, 1e-6))
     lastPeak = Int(peak)
@@ -436,6 +466,9 @@ class AudioManager: NSObject {
     guard let channelData = buffer.floatChannelData else { return }
     let frameLength = Int(buffer.frameLength)
     let channelCount = Int(buffer.format.channelCount)
+    
+    // Safety check - ensure we have valid data
+    guard frameLength > 0 && channelCount > 0 else { return }
     
     // Store interleaved audio data in circular buffer
     for frame in 0..<frameLength {
