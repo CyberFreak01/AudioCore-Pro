@@ -157,6 +157,33 @@ class ChunkManager: NSObject {
     }
     
     // MARK: - Private Methods
+    // Backwards-compatible helpers referenced by init()
+    private func loadPendingChunks() {
+        // Load from persistent storage into memory queue
+        uploadQueue = persistentQueue.loadAllChunks()
+    }
+
+    private func setupNetworkCallbacks() {
+        // Only wire callbacks here; monitor is started in init()
+        networkMonitor.onNetworkAvailable = { [weak self] in
+            self?.processingQueue.async {
+                self?.processUploadQueue()
+            }
+        }
+        networkMonitor.onNetworkUnavailable = { [weak self] in
+            // No-op; recording side buffers locally. We could pause uploads if needed.
+            _ = self // retain for potential future use
+        }
+    }
+
+    private func startQueueProcessing() {
+        // Kick off initial processing and ensure background tasks are registered
+        processingQueue.async { [weak self] in
+            self?.processUploadQueue()
+            self?.setupBackgroundTasks()
+        }
+    }
+
     private func loadPersistentQueue() {
         uploadQueue = persistentQueue.loadAllChunks()
     }
