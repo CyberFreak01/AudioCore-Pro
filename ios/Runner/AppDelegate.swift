@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import AVFoundation
+import BackgroundTasks
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -12,6 +13,10 @@ import AVFoundation
   ) -> Bool {
     print("AppDelegate: Starting application launch")
     print("AppDelegate: Flutter framework available: \(FlutterEngine.self)")
+    
+    // Register background tasks before anything else
+    BackgroundTaskManager.shared.registerBackgroundTasks()
+    
     GeneratedPluginRegistrant.register(with: self)
     print("AppDelegate: Plugin registrant registered")
     
@@ -84,6 +89,19 @@ import AVFoundation
         result(AudioManager.shared.getLastActiveSessionId())
       case "clearLastActiveSession":
         AudioManager.shared.clearLastActiveSession()
+        result(true)
+      case "getNetworkInfo":
+        let networkMonitor = NetworkMonitor()
+        result(networkMonitor.getNetworkInfo())
+      case "retryFailedChunks":
+        let sessionId = args?["sessionId"] as? String
+        AudioManager.shared.rescanPending(sessionId: sessionId ?? "")
+        result(true)
+      case "getQueueStats":
+        let chunkManager = ChunkManager.shared
+        result(chunkManager.getPendingSessions())
+      case "runIntegrationTests":
+        AudioManager.shared.runIntegrationTests()
         result(true)
       default:
         result(FlutterMethodNotImplemented)

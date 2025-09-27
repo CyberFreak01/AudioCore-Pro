@@ -79,6 +79,9 @@ class RecordingProvider extends ChangeNotifier {
         case 'audio_level':
           _handleAudioLevel(event);
           break;
+        case 'chunk_uploaded':
+          _handleChunkUploaded(event);
+          break;
         case 'pending_chunks':
           await _handlePendingChunks(event);
           break;
@@ -106,6 +109,18 @@ class RecordingProvider extends ChangeNotifier {
     }
   }
 
+  void _handleChunkUploaded(Map event) {
+    final chunkNumber = event['chunkNumber'] as int?;
+    if (chunkNumber != null) {
+      _uploadedChunks.add('chunk_$chunkNumber');
+      if (chunkNumber + 1 > _chunkCounter) {
+        _chunkCounter = chunkNumber + 1;
+      }
+      notifyListeners();
+      debugPrint('Chunk $chunkNumber uploaded successfully');
+    }
+  }
+
   /// Handle permission granted event
   void _handlePermissionGranted(Map event) {
     final permission = event['permission'] as String?;
@@ -118,146 +133,41 @@ class RecordingProvider extends ChangeNotifier {
     }
   }
 
-  /// Handle new audio chunk from native platform
+  /// Handle new audio chunk from native platform (now handled natively)
   Future<void> _handleChunkReady(Map event) async {
-    if (_sessionService == null || _currentSessionId == null) return;
-    
-    try {
-      final chunkNumber = event['chunkNumber'] as int;
-      final filePath = event['filePath'] as String;
-      final audioFile = File(filePath);
-      
-      if (!audioFile.existsSync()) {
-        debugPrint('Audio chunk file not found: $filePath');
-        return;
-      }
-
-      // Upload chunk to backend with error handling
-      final success = await _sessionService!.uploadChunk(
-        _currentSessionId!,
-        chunkNumber,
-        audioFile,
-      );
-
-      if (success) {
-        // Notify server about successful upload
-        final notified = await _sessionService!.notifyChunkUploaded(
-          _currentSessionId!,
-          chunkNumber,
-        );
-        
-        if (notified) {
-          _chunkCounter = chunkNumber + 1;
-          _uploadedChunks.add('chunk_$chunkNumber');
-          notifyListeners();
-          
-          // Mark native pending queue as uploaded
-          await _platform.invokeMethod('markChunkUploaded', {
-            'sessionId': _currentSessionId!,
-            'chunkNumber': chunkNumber,
-          });
-
-          // After success, attempt to drain any older pending chunks
-          _triggerRescanPending();
-
-          debugPrint('Successfully uploaded chunk $chunkNumber for session $_currentSessionId');
-        } else {
-          debugPrint('Chunk uploaded but notification failed for chunk $chunkNumber');
-        }
-      } else {
-        // Keep recording; native pending queue will hold this chunk for retry
-        debugPrint('Failed to upload chunk $chunkNumber - queued for retry');
-      }
-    } catch (e) {
-      debugPrint('Error handling chunk: $e');
-      // Keep recording; allow retry via pending queue
-    }
+    // Chunk handling is now done entirely in native code
+    // This method is kept for compatibility but does nothing
+    debugPrint('Chunk ready event received - handled natively');
   }
 
-  /// Handle list of pending chunks from native (rescanPending)
+  /// Handle list of pending chunks from native (rescanPending) - now handled natively
   Future<void> _handlePendingChunks(Map event) async {
-    // Allow recovery even if no active recording is set
-    if (_sessionService == null) return;
-    final sid = event['sessionId'] as String?;
-    if (sid == null) return;
-    final chunks = (event['chunks'] as List?)?.cast<Map>() ?? const [];
-    // Sort strictly by chunkNumber asc to prevent gaps
-    chunks.sort((a, b) => (a['chunkNumber'] as int).compareTo(b['chunkNumber'] as int));
-    for (final c in chunks) {
-      final chunkNumber = c['chunkNumber'] as int?;
-      final path = c['filePath'] as String?;
-      final exists = c['exists'] as bool? ?? false;
-      if (chunkNumber == null || path == null || !exists) continue;
-      final file = File(path);
-      if (!file.existsSync()) continue;
-      try {
-        final uploaded = await _sessionService!.uploadChunk(sid, chunkNumber, file);
-        if (uploaded) {
-          final notified = await _sessionService!.notifyChunkUploaded(sid, chunkNumber);
-          if (notified) {
-            await _platform.invokeMethod('markChunkUploaded', {
-              'sessionId': sid,
-              'chunkNumber': chunkNumber,
-            });
-            if (chunkNumber + 1 > _chunkCounter) {
-              _chunkCounter = chunkNumber + 1;
-              notifyListeners();
-            }
-          }
-        } else {
-          // Stop attempting further retries in this batch to preserve order
-          break;
-        }
-      } catch (e) {
-        debugPrint('Retry failed for chunk $chunkNumber: $e');
-        break;
-      }
-    }
+    // Chunk uploads are now handled entirely in native code
+    // This method is kept for compatibility but does nothing
+    debugPrint('Pending chunks event received - handled natively');
   }
 
   /// Trigger rescan on network available
   Future<void> _handleNetworkAvailable() async {
-    // On network regain, prefer resending for current session; if none, use last active
-    if (_currentSessionId != null) {
-      await _platform.invokeMethod('rescanPending', {'sessionId': _currentSessionId});
-    } else {
-      await _recoverLastSessionPending();
-    }
+    // Network recovery is now handled natively
+    debugPrint('Network available - native upload system will resume automatically');
   }
 
   Future<void> _recoverAllSessionsPending() async {
-    try {
-      final sessions = await _platform.invokeMethod<List<dynamic>>('listPendingSessions');
-      final list = sessions?.cast<Map>() ?? const [];
-      // Process each pending session one by one
-      for (final s in list) {
-        final sid = s['sessionId'] as String?;
-        if (sid == null) continue;
-        // Ask native to emit pending for this session; _handlePendingChunks will upload
-        await _platform.invokeMethod('rescanPending', {'sessionId': sid});
-      }
-    } catch (e) {
-      debugPrint('Failed to list/rescan pending sessions: $e');
-    }
+    // Recovery is now handled natively in MainActivity.recoverChunkQueue()
+    debugPrint('Session recovery handled natively');
   }
 
   /// Recover only the most recent active session's pending chunks on cold start
   Future<void> _recoverLastSessionPending() async {
-    try {
-      final sid = await _platform.invokeMethod<String>('getLastActiveSessionId');
-      if (sid != null && sid.isNotEmpty) {
-        await _platform.invokeMethod('rescanPending', {'sessionId': sid});
-      }
-    } catch (e) {
-      debugPrint('Failed to recover last session: $e');
-    }
+    // Recovery is now handled natively in MainActivity.recoverChunkQueue()
+    debugPrint('Last session recovery handled natively');
   }
 
   void _startRetryTimer() {
+    // Retry logic is now handled natively
     _retryTimer?.cancel();
-    _retryTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      _triggerRescanPending();
-    });
+    _retryTimer = null;
   }
 
   void _stopRetryTimer() {
@@ -266,13 +176,8 @@ class RecordingProvider extends ChangeNotifier {
   }
 
   Future<void> _triggerRescanPending() async {
-    final sid = _currentSessionId;
-    if (sid == null) return;
-    try {
-      await _platform.invokeMethod('rescanPending', {'sessionId': sid});
-    } catch (e) {
-      debugPrint('Rescan trigger failed: $e');
-    }
+    // Rescan is now handled natively
+    debugPrint('Rescan handled natively');
   }
 
   /// Handle recording stopped event
@@ -281,7 +186,7 @@ class RecordingProvider extends ChangeNotifier {
     debugPrint('Recording stopped with $totalChunks total chunks');
   }
 
-  /// Start recording session with preflight checks
+  /// Start recording session
   Future<bool> startRecording(String sessionId) async {
     try {
       if (_sessionService == null) {
@@ -289,16 +194,7 @@ class RecordingProvider extends ChangeNotifier {
         return false;
       }
 
-      // Preflight check: Verify session exists and get presigned URL
-      debugPrint('Starting preflight checks for session: $sessionId');
-      
-      final presignedUrl = await _sessionService!.getPresignedUrl(sessionId, 0);
-      if (presignedUrl == null) {
-        _setError('Failed to get presigned URL - session may not exist');
-        return false;
-      }
-      
-      debugPrint('Preflight successful, starting recording...');
+      debugPrint('Starting recording for session: $sessionId');
 
       _setState(RecordingState.recording);
       _currentSessionId = sessionId;
@@ -316,7 +212,7 @@ class RecordingProvider extends ChangeNotifier {
       _startTimer();
       _startRetryTimer();
 
-      // Start native audio recording
+      // Start native audio recording (native code will handle server communication)
       await _platform.invokeMethod('startRecording', {
         'sessionId': sessionId,
         'outputFormat': 'wav',
@@ -327,8 +223,6 @@ class RecordingProvider extends ChangeNotifier {
       await MicService.startMic();
 
       debugPrint('Started recording for session: $sessionId');
-      // Proactively drain any pending older chunks at start
-      _triggerRescanPending();
       return true;
     } on PlatformException catch (e) {
       if (e.code == 'PERMISSION_ERROR') {
@@ -441,6 +335,37 @@ class RecordingProvider extends ChangeNotifier {
       debugPrint('Failed to get gain: $e');
     }
     return _gain;
+  }
+
+  /// Configure server URL for native uploads
+  Future<void> setServerUrl(String url) async {
+    try {
+      await _platform.invokeMethod('setServerUrl', {'url': url});
+      debugPrint('Server URL configured: $url');
+    } catch (e) {
+      debugPrint('Failed to set server URL: $e');
+    }
+  }
+
+  /// Force resume chunk processing (useful after network issues)
+  Future<void> forceResumeProcessing() async {
+    try {
+      await _platform.invokeMethod('forceResumeProcessing');
+      debugPrint('Force resumed chunk processing');
+    } catch (e) {
+      debugPrint('Failed to force resume processing: $e');
+    }
+  }
+
+  /// Get current queue status
+  Future<Map<String, dynamic>?> getQueueStatus() async {
+    try {
+      final status = await _platform.invokeMethod<Map<dynamic, dynamic>>('getQueueStatus');
+      return status?.cast<String, dynamic>();
+    } catch (e) {
+      debugPrint('Failed to get queue status: $e');
+      return null;
+    }
   }
 
   /// Mock audio chunk generation (for testing)

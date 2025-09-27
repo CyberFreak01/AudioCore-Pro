@@ -17,11 +17,15 @@ class MedicalTranscriptionApp extends StatelessWidget {
     print('Flutter: Building MedicalTranscriptionApp');
     return MultiProvider(
       providers: [
-        Provider(create: (_) => SessionService('https://scribe-server-yu9q.onrender.com/')),
+        Provider(
+            create: (_) => SessionService(
+                'https://scribe-server-production-f150.up.railway.app/')),
         ChangeNotifierProxyProvider<SessionService, RecordingProvider>(
           create: (_) => RecordingProvider(),
           update: (_, sessionService, recordingProvider) {
             recordingProvider?.initialize(sessionService);
+            // Configure native server URL to match Flutter service
+            recordingProvider?.setServerUrl('https://scribe-server-production-f150.up.railway.app');
             return recordingProvider!;
           },
         ),

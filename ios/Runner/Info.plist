@@ -49,6 +49,13 @@
 	<array>
 		<string>audio</string>
 		<string>background-processing</string>
+		<string>background-fetch</string>
+		<string>voip</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.medicalscribe.audio-upload</string>
+		<string>com.medicalscribe.chunk-retry</string>
 	</array>
 	<key>AVAudioSessionCategory</key>
 	<string>AVAudioSessionCategoryPlayAndRecord</string>
@@ -66,5 +73,15 @@
 	<array>
 		<string>armv7</string>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Allow ALL HTTP and HTTPS traffic - No restrictions for maximum flexibility -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
