@@ -51,7 +51,7 @@ class ChunkManager: NSObject {
     static let shared = ChunkManager()
     
     private let persistentQueue = PersistentQueue()
-    private let networkMonitor = NetworkMonitor()
+    private let networkMonitor = NetworkMonitor.shared
     private let backgroundTaskManager = BackgroundTaskManager()
     
     private var uploadQueue: [AudioChunk] = []
@@ -59,18 +59,25 @@ class ChunkManager: NSObject {
     private let maxConcurrentUploads = 3
     private let maxRetryCount = 5
     private let retryDelayBase: TimeInterval = 2.0 // Exponential backoff base
-    
     private let processingQueue = DispatchQueue(label: "ChunkManager.processing", qos: .utility)
     private let uploadQueue_concurrent = DispatchQueue(label: "ChunkManager.upload", qos: .utility, attributes: .concurrent)
     
     override init() {
         super.init()
-        loadPersistentQueue()
-        setupNetworkMonitoring()
-        setupBackgroundTasks()
+        
+        // Start network monitoring first
+        networkMonitor.startMonitoring()
+        
+        // Load existing chunks from persistent storage
+        loadPendingChunks()
+        
+        // Set up network monitoring callbacks
+        setupNetworkCallbacks()
+        
+        // Start processing queue
+        startQueueProcessing()
     }
     
-    // MARK: - Public Interface
     func addChunk(_ chunk: AudioChunk) {
         processingQueue.async {
             self.uploadQueue.append(chunk)

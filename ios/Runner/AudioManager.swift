@@ -32,7 +32,7 @@ class AudioManager: NSObject {
   // Enhanced components
   private let chunkManager = ChunkManager.shared
   private let backgroundTaskManager = BackgroundTaskManager.shared
-  private let networkMonitor = NetworkMonitor()
+  private let networkMonitor = NetworkMonitor.shared
   
   // Audio session management
   private var isAudioSessionInterrupted = false
@@ -49,17 +49,18 @@ class AudioManager: NSObject {
   private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
   
   // Audio buffer for network outages
-  private var audioBuffer: CircularBuffer<Float>?
   private let maxBufferDuration: TimeInterval = 300 // 5 minutes
   
   // Pending queue bookkeeping
   private var lastActiveSessionId: String?
+  
+  // Audio buffer for network outages
+  private var audioBuffer: CircularBuffer<Float>?
 
   override init() {
     super.init()
     setupAudioSessionNotifications()
     setupCallObserver()
-    setupNetworkMonitoring()
     setupBackgroundNotifications()
     
     // Initialize audio buffer
@@ -70,7 +71,7 @@ class AudioManager: NSObject {
   deinit {
     cleanup()
   }
-  
+
   func setEventSink(_ sink: FlutterEventSink?) {
     eventSink = sink
   }
@@ -141,17 +142,6 @@ class AudioManager: NSObject {
     callObserver?.setDelegate(self, queue: nil)
   }
   
-  private func setupNetworkMonitoring() {
-    networkMonitor.onNetworkAvailable = { [weak self] in
-      print("AudioManager: Network became available, processing upload queue")
-      // Network is available, chunk manager will automatically process queue
-    }
-    
-    networkMonitor.onNetworkUnavailable = { [weak self] in
-      print("AudioManager: Network unavailable, buffering audio locally")
-      // Continue recording to local buffer
-    }
-  }
   
   private func setupBackgroundNotifications() {
     let notificationCenter = NotificationCenter.default

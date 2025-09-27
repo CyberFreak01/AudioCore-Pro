@@ -91,7 +91,7 @@ import BackgroundTasks
         AudioManager.shared.clearLastActiveSession()
         result(true)
       case "getNetworkInfo":
-        let networkMonitor = NetworkMonitor()
+        let networkMonitor = NetworkMonitor.shared
         result(networkMonitor.getNetworkInfo())
       case "retryFailedChunks":
         let sessionId = args?["sessionId"] as? String

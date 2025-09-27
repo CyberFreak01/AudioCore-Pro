@@ -2,8 +2,11 @@ import Foundation
 import Network
 
 class NetworkMonitor: ObservableObject {
-    private let monitor = NWPathMonitor()
+    static let shared = NetworkMonitor()
+    
+    private var monitor: NWPathMonitor?
     private let queue = DispatchQueue(label: "NetworkMonitor")
+    private var isMonitoring = false
     
     @Published var isNetworkAvailable = false
     @Published var connectionType: ConnectionType = .unknown
@@ -21,8 +24,8 @@ class NetworkMonitor: ObservableObject {
         case unknown
     }
     
-    init() {
-        startMonitoring()
+    private init() {
+        // Private init for singleton
     }
     
     deinit {
@@ -30,16 +33,24 @@ class NetworkMonitor: ObservableObject {
     }
     
     func startMonitoring() {
-        monitor.pathUpdateHandler = { [weak self] path in
+        guard !isMonitoring else { return }
+        
+        monitor = NWPathMonitor()
+        monitor?.pathUpdateHandler = { [weak self] path in
             DispatchQueue.main.async {
                 self?.updateNetworkStatus(path)
             }
         }
-        monitor.start(queue: queue)
+        monitor?.start(queue: queue)
+        isMonitoring = true
     }
     
     func stopMonitoring() {
-        monitor.cancel()
+        guard isMonitoring else { return }
+        
+        monitor?.cancel()
+        monitor = nil
+        isMonitoring = false
     }
     
     private func updateNetworkStatus(_ path: NWPath) {
