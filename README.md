@@ -4,7 +4,7 @@ Android APK Download:
 
 https://drive.google.com/file/d/11AhXmS1v2HNTbjj2YlruRmR3YsQQRn3a/view?usp=sharing
 
-Android Demo Video : 
+Android Demo Video (Tested on Android 15) : https://youtu.be/-1beEaBs0yc
 
 IOS Loom Video: https://www.loom.com/share/0db52f9d54474493892d7e324646175f?sid=77dab600-4a76-4ed3-a705-f3a5d588a1ff
 
