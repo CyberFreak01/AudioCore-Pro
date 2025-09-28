@@ -215,32 +215,24 @@ class RecordingScreen extends StatelessWidget {
 
                       const SizedBox(height: 20),
 
-                      // Error Message
+                      // Status Message (Error/Info)
                       if (recordingProvider.errorMessage != null)
                         Card(
-                          color: recordingProvider.errorMessage!.contains('permission') 
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Theme.of(context).colorScheme.errorContainer,
+                          color: _getMessageCardColor(context, recordingProvider.errorMessage!),
                           child: Padding(
                             padding: const EdgeInsets.all(16),
                             child: Row(
                               children: [
                                 Icon(
-                                  recordingProvider.errorMessage!.contains('permission') 
-                                      ? Icons.mic_off 
-                                      : Icons.warning, 
-                                  color: recordingProvider.errorMessage!.contains('permission') 
-                                      ? Theme.of(context).colorScheme.onPrimaryContainer
-                                      : Theme.of(context).colorScheme.onErrorContainer,
+                                  _getMessageIcon(recordingProvider.errorMessage!),
+                                  color: _getMessageTextColor(context, recordingProvider.errorMessage!),
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Text(
                                     recordingProvider.errorMessage!,
                                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                      color: recordingProvider.errorMessage!.contains('permission') 
-                                          ? Theme.of(context).colorScheme.onPrimaryContainer
-                                          : Theme.of(context).colorScheme.onErrorContainer,
+                                      color: _getMessageTextColor(context, recordingProvider.errorMessage!),
                                     ),
                                   ),
                                 ),
@@ -678,5 +670,50 @@ class RecordingScreen extends StatelessWidget {
       selectedColor: Theme.of(context).colorScheme.primaryContainer,
       checkmarkColor: Theme.of(context).colorScheme.onPrimaryContainer,
     );
+  }
+
+  /// Get appropriate card color for different message types
+  Color _getMessageCardColor(BuildContext context, String message) {
+    if (message.contains('permission')) {
+      return Theme.of(context).colorScheme.primaryContainer;
+    } else if (message.contains('auto-paused')) {
+      return Theme.of(context).colorScheme.secondaryContainer;
+    } else if (message.contains('Microphone')) {
+      return Theme.of(context).colorScheme.tertiaryContainer;
+    } else {
+      return Theme.of(context).colorScheme.errorContainer;
+    }
+  }
+
+  /// Get appropriate icon for different message types
+  IconData _getMessageIcon(String message) {
+    if (message.contains('permission')) {
+      return Icons.mic_off;
+    } else if (message.contains('Microphone acquired')) {
+      return Icons.mic_external_on;
+    } else if (message.contains('Microphone')) {
+      return Icons.mic_none;
+    } else if (message.contains('auto-paused')) {
+      return Icons.phone;
+    } else if (message.contains('Incoming call')) {
+      return Icons.phone_in_talk;
+    } else if (message.contains('Call in progress')) {
+      return Icons.call;
+    } else {
+      return Icons.warning;
+    }
+  }
+
+  /// Get appropriate text color for different message types
+  Color _getMessageTextColor(BuildContext context, String message) {
+    if (message.contains('permission')) {
+      return Theme.of(context).colorScheme.onPrimaryContainer;
+    } else if (message.contains('auto-paused')) {
+      return Theme.of(context).colorScheme.onSecondaryContainer;
+    } else if (message.contains('Microphone')) {
+      return Theme.of(context).colorScheme.onTertiaryContainer;
+    } else {
+      return Theme.of(context).colorScheme.onErrorContainer;
+    }
   }
 }

@@ -37,6 +37,9 @@ import java.net.URL
 import java.io.OutputStream
 import java.io.FileInputStream
 import java.io.BufferedInputStream
+import android.telephony.TelephonyManager
+import android.telephony.PhoneStateListener
+import android.content.Context
 
 class MainActivity: FlutterActivity() {
     private val CHANNEL = "medical_transcription/audio"
@@ -77,6 +80,20 @@ class MainActivity: FlutterActivity() {
     private var chunkProcessingReceiver: BroadcastReceiver? = null
     private var recordingActionReceiver: BroadcastReceiver? = null
     
+    // Phone state monitoring for call interruption
+    private var telephonyManager: TelephonyManager? = null
+    private var phoneStateListener: PhoneStateListener? = null
+    private var wasRecordingBeforeCall = false
+    private var wasPausedBeforeCall = false
+    
+    // Audio focus monitoring for microphone acquisition
+    private var audioManager: AudioManager? = null
+    private var audioFocusChangeListener: AudioManager.OnAudioFocusChangeListener? = null
+    private var hasAudioFocus = false
+    private var wasRecordingBeforeFocusLoss = false
+    private var focusRecoveryHandler: android.os.Handler? = null
+    private var focusRecoveryRunnable: Runnable? = null
+    
     data class ChunkItem(
         val sessionId: String,
         val chunkNumber: Int,
@@ -91,6 +108,12 @@ class MainActivity: FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        
+        // Initialize phone state monitoring
+        setupPhoneStateListener()
+        
+        // Initialize audio focus monitoring
+        setupAudioFocusListener()
         
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -339,6 +362,12 @@ class MainActivity: FlutterActivity() {
                 return false
             }
 
+            // Request audio focus before starting recording
+            if (!requestAudioFocus()) {
+                android.util.Log.e("MainActivity", "Failed to get audio focus for recording")
+                return false
+            }
+
             val channelConfig = AudioFormat.CHANNEL_IN_MONO
             val audioFormat = AudioFormat.ENCODING_PCM_16BIT
             val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
@@ -557,6 +586,10 @@ class MainActivity: FlutterActivity() {
             }
 
             cancelControlNotification()
+            
+            // Abandon audio focus when stopping recording
+            abandonAudioFocus()
+            
             return true
         } catch (e: Exception) {
             return false
@@ -1542,6 +1575,295 @@ class MainActivity: FlutterActivity() {
         }
     }
 
+    /**
+     * Setup phone state listener for call interruption handling
+     */
+    private fun setupPhoneStateListener() {
+        try {
+            telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+            
+            phoneStateListener = object : PhoneStateListener() {
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    super.onCallStateChanged(state, phoneNumber)
+                    
+                    when (state) {
+                        TelephonyManager.CALL_STATE_RINGING -> {
+                            // Incoming call - pause recording if active
+                            handleCallInterruption("incoming_call")
+                        }
+                        TelephonyManager.CALL_STATE_OFFHOOK -> {
+                            // Call answered or outgoing call - pause recording if active
+                            handleCallInterruption("call_active")
+                        }
+                        TelephonyManager.CALL_STATE_IDLE -> {
+                            // Call ended - resume recording if it was active before
+                            handleCallEnded()
+                        }
+                    }
+                }
+            }
+            
+            // Register the listener
+            telephonyManager?.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE)
+            android.util.Log.d("MainActivity", "Phone state listener registered successfully")
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error setting up phone state listener", e)
+        }
+    }
+
+    /**
+     * Handle call interruption by pausing recording
+     */
+    private fun handleCallInterruption(callType: String) {
+        try {
+            android.util.Log.d("MainActivity", "Call interruption detected: $callType")
+            
+            // Store current recording state
+            wasRecordingBeforeCall = isRecording
+            wasPausedBeforeCall = false // We'll determine this based on current state
+            
+            if (isRecording) {
+                android.util.Log.d("MainActivity", "Auto-pausing recording due to call")
+                
+                // Pause the recording
+                if (pauseAudioRecording()) {
+                    // Notify Flutter about auto-pause
+                    eventSink?.success(mapOf(
+                        "type" to "call_interruption",
+                        "action" to "paused",
+                        "reason" to callType,
+                        "sessionId" to sessionId,
+                        "remainingTimeMs" to getRemainingTimeMs(),
+                        "totalChunks" to chunkCounter
+                    ))
+                }
+            } else {
+                // Recording was already paused, just remember this state
+                wasPausedBeforeCall = true
+            }
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error handling call interruption", e)
+        }
+    }
+
+    /**
+     * Handle call ended by resuming recording if it was active before
+     */
+    private fun handleCallEnded() {
+        try {
+            android.util.Log.d("MainActivity", "Call ended, checking if recording should resume")
+            
+            // Only resume if recording was active before the call and we have a session
+            if (wasRecordingBeforeCall && !wasPausedBeforeCall && sessionId != null) {
+                android.util.Log.d("MainActivity", "Auto-resuming recording after call ended")
+                
+                // Resume the recording
+                if (resumeAudioRecording()) {
+                    // Notify Flutter about auto-resume
+                    eventSink?.success(mapOf(
+                        "type" to "call_interruption",
+                        "action" to "resumed",
+                        "reason" to "call_ended",
+                        "sessionId" to sessionId,
+                        "remainingTimeMs" to getRemainingTimeMs(),
+                        "totalChunks" to chunkCounter
+                    ))
+                }
+            }
+            
+            // Reset call state tracking
+            wasRecordingBeforeCall = false
+            wasPausedBeforeCall = false
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error handling call ended", e)
+        }
+    }
+
+    /**
+     * Get remaining time in milliseconds for timer
+     */
+    private fun getRemainingTimeMs(): Long? {
+        return if (timerDurationMs != null && recordingStartTime > 0) {
+            val elapsed = System.currentTimeMillis() - recordingStartTime
+            val remaining = timerDurationMs!! - elapsed
+            if (remaining > 0) remaining else 0
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Setup audio focus listener for microphone acquisition detection
+     */
+    private fun setupAudioFocusListener() {
+        try {
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            focusRecoveryHandler = android.os.Handler(mainLooper)
+            
+            audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+                android.util.Log.d("MainActivity", "Audio focus change: $focusChange")
+                
+                when (focusChange) {
+                    AudioManager.AUDIOFOCUS_LOSS -> {
+                        // Permanent loss - another app took audio focus
+                        handleAudioFocusLoss("permanent_loss")
+                    }
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                        // Temporary loss - like phone call
+                        handleAudioFocusLoss("temporary_loss")
+                    }
+                    AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                        // Can duck - but we'll pause for recording quality
+                        handleAudioFocusLoss("duck_loss")
+                    }
+                    AudioManager.AUDIOFOCUS_GAIN -> {
+                        // Regained focus - can resume
+                        handleAudioFocusGain()
+                    }
+                }
+            }
+            
+            android.util.Log.d("MainActivity", "Audio focus listener setup successfully")
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error setting up audio focus listener", e)
+        }
+    }
+
+    /**
+     * Request audio focus for recording
+     */
+    private fun requestAudioFocus(): Boolean {
+        return try {
+            val result = audioManager?.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN
+            )
+            
+            hasAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            android.util.Log.d("MainActivity", "Audio focus request result: $hasAudioFocus")
+            hasAudioFocus
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error requesting audio focus", e)
+            false
+        }
+    }
+
+    /**
+     * Abandon audio focus
+     */
+    private fun abandonAudioFocus() {
+        try {
+            audioManager?.abandonAudioFocus(audioFocusChangeListener)
+            hasAudioFocus = false
+            android.util.Log.d("MainActivity", "Audio focus abandoned")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error abandoning audio focus", e)
+        }
+    }
+
+    /**
+     * Handle audio focus loss by pausing recording
+     */
+    private fun handleAudioFocusLoss(lossType: String) {
+        try {
+            android.util.Log.d("MainActivity", "Audio focus lost: $lossType")
+            
+            // Cancel any pending recovery attempts
+            focusRecoveryRunnable?.let { focusRecoveryHandler?.removeCallbacks(it) }
+            
+            hasAudioFocus = false
+            wasRecordingBeforeFocusLoss = isRecording
+            
+            if (isRecording) {
+                android.util.Log.d("MainActivity", "Auto-pausing recording due to audio focus loss")
+                
+                if (pauseAudioRecording()) {
+                    // Notify Flutter about auto-pause
+                    eventSink?.success(mapOf(
+                        "type" to "audio_focus_change",
+                        "action" to "paused",
+                        "reason" to lossType,
+                        "sessionId" to sessionId,
+                        "remainingTimeMs" to getRemainingTimeMs(),
+                        "totalChunks" to chunkCounter
+                    ))
+                    
+                    // Start trying to recover audio focus
+                    startAudioFocusRecovery()
+                }
+            }
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error handling audio focus loss", e)
+        }
+    }
+
+    /**
+     * Handle audio focus gain by resuming recording if appropriate
+     */
+    private fun handleAudioFocusGain() {
+        try {
+            android.util.Log.d("MainActivity", "Audio focus gained")
+            
+            // Cancel recovery attempts since we got focus back
+            focusRecoveryRunnable?.let { focusRecoveryHandler?.removeCallbacks(it) }
+            
+            hasAudioFocus = true
+            
+            // Only resume if we were recording before focus loss and have a session
+            if (wasRecordingBeforeFocusLoss && sessionId != null) {
+                android.util.Log.d("MainActivity", "Auto-resuming recording after audio focus gain")
+                
+                if (resumeAudioRecording()) {
+                    // Notify Flutter about auto-resume
+                    eventSink?.success(mapOf(
+                        "type" to "audio_focus_change",
+                        "action" to "resumed",
+                        "reason" to "focus_gained",
+                        "sessionId" to sessionId,
+                        "remainingTimeMs" to getRemainingTimeMs(),
+                        "totalChunks" to chunkCounter
+                    ))
+                }
+            }
+            
+            // Reset focus loss tracking
+            wasRecordingBeforeFocusLoss = false
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error handling audio focus gain", e)
+        }
+    }
+
+    /**
+     * Start continuous attempts to recover audio focus
+     */
+    private fun startAudioFocusRecovery() {
+        focusRecoveryRunnable = object : Runnable {
+            override fun run() {
+                if (!hasAudioFocus && wasRecordingBeforeFocusLoss) {
+                    android.util.Log.d("MainActivity", "Attempting to recover audio focus...")
+                    
+                    if (requestAudioFocus()) {
+                        android.util.Log.d("MainActivity", "Audio focus recovered!")
+                        handleAudioFocusGain()
+                    } else {
+                        // Try again in 2 seconds
+                        focusRecoveryHandler?.postDelayed(this, 2000)
+                    }
+                }
+            }
+        }
+        
+        // Start recovery attempts after 1 second
+        focusRecoveryHandler?.postDelayed(focusRecoveryRunnable!!, 1000)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         
@@ -1576,6 +1898,23 @@ class MainActivity: FlutterActivity() {
             networkReceiver?.let { unregisterReceiver(it) }
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Error unregistering network receiver", e)
+        }
+        
+        // Unregister phone state listener
+        try {
+            phoneStateListener?.let { 
+                telephonyManager?.listen(it, PhoneStateListener.LISTEN_NONE)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error unregistering phone state listener", e)
+        }
+        
+        // Cleanup audio focus and recovery
+        try {
+            focusRecoveryRunnable?.let { focusRecoveryHandler?.removeCallbacks(it) }
+            abandonAudioFocus()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error cleaning up audio focus", e)
         }
         
         uploadExecutor.shutdown()

@@ -59,6 +59,12 @@ class RecordingEventHandler {
       case 'network_available':
         _handleNetworkAvailable();
         break;
+      case 'call_interruption':
+        _handleCallInterruption(event);
+        break;
+      case 'audio_focus_change':
+        _handleAudioFocusChange(event);
+        break;
       default:
         debugPrint('Unknown event type: $type');
     }
@@ -170,6 +176,124 @@ class RecordingEventHandler {
   /// Handle network available event
   void _handleNetworkAvailable() {
     debugPrint('Network available - native upload system will resume automatically');
+  }
+  
+  /// Handle call interruption events (auto pause/resume)
+  void _handleCallInterruption(Map<String, dynamic> event) {
+    final action = event['action'] as String?;
+    final reason = event['reason'] as String?;
+    final sessionId = event['sessionId'] as String?;
+    final remainingTimeMs = event['remainingTimeMs'] as int?;
+    final totalChunks = event['totalChunks'] as int?;
+    
+    debugPrint('Call interruption: action=$action, reason=$reason, session=$sessionId');
+    
+    switch (action) {
+      case 'paused':
+        // Sync state from native - recording was auto-paused due to call
+        _stateManager.syncFromNative(
+          stateString: 'paused',
+          sessionId: sessionId,
+          totalChunks: totalChunks,
+          remainingTimeMs: remainingTimeMs,
+        );
+        
+        // Show user-friendly message about auto-pause
+        final reasonText = _getCallReasonText(reason);
+        _stateManager.setError('Recording auto-paused: $reasonText');
+        break;
+        
+      case 'resumed':
+        // Sync state from native - recording was auto-resumed after call ended
+        _stateManager.syncFromNative(
+          stateString: 'recording',
+          sessionId: sessionId,
+          totalChunks: totalChunks,
+          remainingTimeMs: remainingTimeMs,
+        );
+        
+        // Clear any call-related error messages and show resume message
+        _stateManager.clearError();
+        debugPrint('Recording auto-resumed after call ended');
+        break;
+        
+      default:
+        debugPrint('Unknown call interruption action: $action');
+    }
+  }
+  
+  /// Get user-friendly text for call interruption reason
+  String _getCallReasonText(String? reason) {
+    switch (reason) {
+      case 'incoming_call':
+        return 'Incoming call detected';
+      case 'call_active':
+        return 'Call in progress';
+      case 'call_ended':
+        return 'Call ended';
+      default:
+        return 'Phone call detected';
+    }
+  }
+  
+  /// Handle audio focus change events (microphone acquisition by other apps)
+  void _handleAudioFocusChange(Map<String, dynamic> event) {
+    final action = event['action'] as String?;
+    final reason = event['reason'] as String?;
+    final sessionId = event['sessionId'] as String?;
+    final remainingTimeMs = event['remainingTimeMs'] as int?;
+    final totalChunks = event['totalChunks'] as int?;
+    
+    debugPrint('Audio focus change: action=$action, reason=$reason, session=$sessionId');
+    
+    switch (action) {
+      case 'paused':
+        // Sync state from native - recording was auto-paused due to microphone acquisition
+        _stateManager.syncFromNative(
+          stateString: 'paused',
+          sessionId: sessionId,
+          totalChunks: totalChunks,
+          remainingTimeMs: remainingTimeMs,
+        );
+        
+        // Show user-friendly message about auto-pause
+        final reasonText = _getAudioFocusReasonText(reason);
+        _stateManager.setError('Recording auto-paused: $reasonText');
+        break;
+        
+      case 'resumed':
+        // Sync state from native - recording was auto-resumed after microphone became available
+        _stateManager.syncFromNative(
+          stateString: 'recording',
+          sessionId: sessionId,
+          totalChunks: totalChunks,
+          remainingTimeMs: remainingTimeMs,
+        );
+        
+        // Clear any focus-related error messages and show resume message
+        _stateManager.clearError();
+        debugPrint('Recording auto-resumed after microphone became available');
+        break;
+        
+      default:
+        debugPrint('Unknown audio focus action: $action');
+    }
+  }
+  
+  /// Get user-friendly text for audio focus change reason
+  String _getAudioFocusReasonText(String? reason) {
+    switch (reason) {
+      case 'permanent_loss':
+        return 'Microphone acquired by another app';
+      case 'temporary_loss':
+        return 'Microphone temporarily unavailable';
+      case 'duck_loss':
+        return 'Audio focus lost (ducking)';
+      case 'focus_gained':
+        return 'Microphone available again';
+      default:
+        return 'Microphone unavailable';
+    }
   }
   
   /// Dispose of resources
