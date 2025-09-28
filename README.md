@@ -1,3 +1,3 @@
-# medicalscribe
+# ai-scribe-copilot
 
-A new Flutter project.
+Android APK Download: 
