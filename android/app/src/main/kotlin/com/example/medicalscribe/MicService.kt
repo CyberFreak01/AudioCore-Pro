@@ -13,6 +13,8 @@
     import android.net.NetworkCapabilities
     import android.net.NetworkRequest
     import android.content.SharedPreferences
+    import android.app.PendingIntent
+    import android.content.pm.PackageManager
 
     class MicService : Service() {
 
@@ -26,11 +28,50 @@
         override fun onCreate() {
             super.onCreate()
             createNotificationChannel()
+            // Create intents for notification actions
+            val stopIntent = Intent(this, NotificationActionReceiver::class.java).apply {
+                action = "com.example.medicalscribe.RECORDING_ACTION"
+                putExtra("action", "stop")
+            }
+            val pauseIntent = Intent(this, NotificationActionReceiver::class.java).apply {
+                action = "com.example.medicalscribe.RECORDING_ACTION"
+                putExtra("action", "pause")
+            }
+            val resumeIntent = Intent(this, NotificationActionReceiver::class.java).apply {
+                action = "com.example.medicalscribe.RECORDING_ACTION"
+                putExtra("action", "resume")
+            }
+
+            // Convert intents to pending intents
+            val stopPendingIntent = PendingIntent.getBroadcast(
+                this, 0, stopIntent, 
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val pausePendingIntent = PendingIntent.getBroadcast(
+                this, 0, pauseIntent, 
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val resumePendingIntent = PendingIntent.getBroadcast(
+                this, 0, resumeIntent, 
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // Create the notification with actions
             val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Microphone is Active")
-                .setContentText("This app is accessing your microphone.")
+                .setContentTitle("Recording in Progress")
+                .setContentText("Tap to open the app")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
+                .addAction(android.R.drawable.ic_media_pause, "Pause", pausePendingIntent)
+                .addAction(R.drawable.ic_media_stop, "Stop", stopPendingIntent)
+                .setContentIntent(
+                    PendingIntent.getActivity(
+                        this,
+                        0,
+                        packageManager.getLaunchIntentForPackage(packageName),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
                 .build()
             startForeground(NOTIFICATION_ID, notification)
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_RESUME, true).apply()
@@ -41,9 +82,13 @@
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val serviceChannel = NotificationChannel(
                     CHANNEL_ID,
-                    "Mic Service Channel",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                )
+                    "Recording Controls",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Shows recording controls and status"
+                    setShowBadge(false)
+                    lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                }
                 val manager = getSystemService(NotificationManager::class.java)
                 manager?.createNotificationChannel(serviceChannel)
             }

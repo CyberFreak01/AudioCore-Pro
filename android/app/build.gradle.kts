@@ -42,3 +42,14 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // WorkManager for background tasks
+    implementation("androidx.work:work-runtime-ktx:2.8.1")
+    
+    // SQLite support (already included in Android but explicit for clarity)
+    implementation("androidx.sqlite:sqlite-ktx:2.3.1")
+    
+    // Coroutines support for WorkManager
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.6.4")
+}

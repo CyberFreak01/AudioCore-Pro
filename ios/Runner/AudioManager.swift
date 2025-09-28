@@ -48,6 +48,11 @@ class AudioManager: NSObject {
   // Background recording
   private var backgroundTaskId: UIBackgroundTaskIdentifier = .invalid
   
+  // Timer functionality
+  private var recordingTimer: Timer?
+  private var timerDuration: TimeInterval?
+  private var recordingStartTime: Date?
+  
   // Audio buffer for network outages
   private let maxBufferDuration: TimeInterval = 300 // 5 minutes
   
@@ -194,12 +199,14 @@ class AudioManager: NSObject {
     }
   }
 
-  func startRecording(sessionId: String, sampleRate: Double = 44100.0, secondsPerChunk: Double = 5.0) throws {
+  func startRecording(sessionId: String, sampleRate: Double = 44100.0, secondsPerChunk: Double = 5.0, timerDuration: TimeInterval? = nil) throws {
     if isRecording { return }
 
     // Store recording parameters
     self.sampleRate = sampleRate
     self.secondsPerChunk = secondsPerChunk
+    self.timerDuration = timerDuration
+    self.recordingStartTime = Date()
     
     try configureAudioSession()
 
@@ -209,6 +216,11 @@ class AudioManager: NSObject {
     self.currentChunkFrames = 0
     self.framesPerChunk = AVAudioFrameCount(sampleRate * secondsPerChunk)
     self.isPaused = false
+    
+    // Start timer if duration is set
+    if let duration = timerDuration {
+      startTimer(duration: duration)
+    }
     
     // Start background task for continuous recording
     backgroundTaskId = backgroundTaskManager.beginBackgroundTask(name: "AudioRecording")
@@ -270,18 +282,15 @@ class AudioManager: NSObject {
     guard isRecording, !isPaused else { return }
     isPaused = true
     stopLevelTimer()
+    stopTimer()
   }
 
-  func resumeRecording() {
-    guard isRecording, isPaused else { return }
-    isPaused = false
-    startLevelTimer()
-  }
 
   func stopRecording() {
     guard isRecording else { return }
     
     print("AudioManager: Stopping recording session \(sessionId ?? "unknown")")
+    stopTimer()
     
     audioEngine.inputNode.removeTap(onBus: 0)
     audioEngine.stop()
@@ -302,6 +311,45 @@ class AudioManager: NSObject {
 
     eventSink?(["type": "recording_stopped", "totalChunks": chunkNumber, "sessionId": sessionId ?? ""])
     sessionId = nil
+  }
+  
+  func resumeRecording() {
+    guard isRecording, isPaused else { return }
+    isPaused = false
+    startLevelTimer()
+    
+    // Restart timer if it was set and we still have time
+    if let duration = timerDuration, let startTime = recordingStartTime {
+      let elapsed = Date().timeIntervalSince(startTime)
+      let remaining = duration - elapsed
+      if remaining > 0 {
+        startTimer(duration: remaining)
+      }
+    }
+  }
+  
+  private func startTimer(duration: TimeInterval) {
+    stopTimer() // Stop any existing timer
+    
+    recordingTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
+      guard let self = self else { return }
+      
+      if self.isRecording {
+        print("AudioManager: Recording timer expired, auto-stopping...")
+        self.stopRecording()
+        // Notify Flutter that recording stopped due to timer
+        self.eventSink?([
+          "type": "recording_stopped",
+          "reason": "timer_expired",
+          "totalChunks": self.chunkNumber
+        ])
+      }
+    }
+  }
+  
+  private func stopTimer() {
+    recordingTimer?.invalidate()
+    recordingTimer = nil
   }
 
   func setGain(_ value: Double) {

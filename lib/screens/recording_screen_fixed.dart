@@ -53,7 +53,7 @@ class RecordingScreen extends StatelessWidget {
                               _buildInfoRow(context, 'Session ID', recordingProvider.currentSessionId ?? 'None'),
                               _buildInfoRow(context, 'Status', _getStatusText(recordingProvider.state)),
                               _buildInfoRow(context, 'Duration', DurationFormatter.formatMinutesSeconds(recordingProvider.recordingDuration)),
-                              _buildInfoRowWithIcon(context, 'Uploaded Chunks', '${recordingProvider.uploadedChunks.length}/${recordingProvider.chunkCounter}', Icons.sync),
+                              _buildInfoRow(context, 'Chunks', '${recordingProvider.chunkCounter}'),
                               if (recordingProvider.isTimerEnabled) ...[
                                 const SizedBox(height: 8),
                                 const Divider(),
@@ -443,7 +443,7 @@ class RecordingScreen extends StatelessWidget {
                   final session = sessions[index];
                   return ListTile(
                     title: Text(session['sessionId'] ?? 'Unknown'),
-                    subtitle: Text('Total Chunks: ${session['totalChunks'] ?? 0}'),
+                    subtitle: Text('Chunks: ${session['totalChunks'] ?? 0}'),
                     trailing: Text(session['status'] ?? 'Unknown'),
                   );
                 },
@@ -620,40 +620,6 @@ class RecordingScreen extends StatelessWidget {
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
-          ),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoRowWithIcon(BuildContext context, String label, String value, IconData icon) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                icon,
-                size: 16,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
           ),
           Text(
             value,

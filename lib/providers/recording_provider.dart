@@ -1,287 +1,112 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import '../core/enums/recording_state.dart';
+import '../core/constants/app_constants.dart';
 import '../services/session_service.dart';
 import '../services/mic_service.dart';
+import '../services/share_service.dart';
+import '../services/platform_service.dart';
+import '../models/session_model.dart';
+import '../models/audio_level_model.dart';
+import 'recording_state_manager.dart';
+import 'recording_event_handler.dart';
 
-enum RecordingState {
-  stopped,
-  recording,
-  paused,
-  error
-}
-
+/// Main provider for recording functionality - coordinates between state manager and services
 class RecordingProvider extends ChangeNotifier {
-  static const MethodChannel _platform = MethodChannel('medical_transcription/audio');
-  static const EventChannel _eventChannel = EventChannel('medical_transcription/audio_stream');
+  final RecordingStateManager _stateManager = RecordingStateManager();
+  final PlatformService _platformService = PlatformService();
   
-  RecordingState _state = RecordingState.stopped;
-  String? _currentSessionId;
-  int _chunkCounter = 0;
-  Duration _recordingDuration = Duration.zero;
-  Timer? _timer;
-  Timer? _retryTimer;
-  List<String> _uploadedChunks = [];
-  String? _errorMessage;
   SessionService? _sessionService;
-  StreamSubscription? _eventSubscription;
-  double? _rmsDb;
-  int? _peakLevel;
-  double _gain = 1.0;
+  RecordingEventHandler? _eventHandler;
 
-  // Getters
-  RecordingState get state => _state;
-  String? get currentSessionId => _currentSessionId;
-  int get chunkCounter => _chunkCounter;
-  Duration get recordingDuration => _recordingDuration;
-  List<String> get uploadedChunks => _uploadedChunks;
-  String? get errorMessage => _errorMessage;
-  bool get isRecording => _state == RecordingState.recording;
-  double? get rmsDb => _rmsDb;
-  int? get peakLevel => _peakLevel;
-  double get gain => _gain;
+  // Delegate getters to state manager
+  RecordingState get state => _stateManager.state;
+  String? get currentSessionId => _stateManager.currentSessionId;
+  SessionModel? get currentSession => _stateManager.currentSession;
+  int get chunkCounter => _stateManager.chunkCounter;
+  Duration get recordingDuration => _stateManager.recordingDuration;
+  List<String> get uploadedChunks => _stateManager.uploadedChunks;
+  String? get errorMessage => _stateManager.errorMessage;
+  bool get isRecording => _stateManager.isRecording;
+  AudioLevelModel get audioLevel => _stateManager.audioLevel;
+  double? get rmsDb => _stateManager.audioLevel.rmsDb;
+  int? get peakLevel => _stateManager.audioLevel.peakLevel;
+  double get gain => _stateManager.gain;
+  
+  // Timer getters
+  Duration? get selectedDuration => _stateManager.selectedTimerDuration;
+  Duration? get remainingTime => _stateManager.remainingTime;
+  bool get isTimerEnabled => _stateManager.isTimerEnabled;
+  bool get hasTimerExpired => _stateManager.hasTimerExpired;
 
   /// Initialize the provider with session service
   void initialize(SessionService sessionService) {
     _sessionService = sessionService;
-    _setupEventListener();
-    _recoverLastSessionPending();
-  }
-
-  /// Handle list of pending chunks from native (compat placeholder)
-  Future<void> _handlePendingChunks(Map event) async {
-    // Native handles retry/resume; this remains for compatibility/logging
-    debugPrint('Pending chunks event received: $event');
-  }
-
-  /// Set up event listener for audio chunks
-  void _setupEventListener() {
-    _eventSubscription = _eventChannel.receiveBroadcastStream().listen(
-      (event) {
-        _handleAudioEvent(event);
-      },
-      onError: (error) {
-        _setError('Audio stream error: $error');
-      },
-    );
-  }
-
-  /// Handle audio events from native platform
-  void _handleAudioEvent(dynamic event) async {
-    if (event is Map) {
-      final type = event['type'] as String?;
-      
-      switch (type) {
-        case 'chunk_ready':
-          await _handleChunkReady(event);
-          break;
-        case 'recording_stopped':
-          _handleRecordingStopped(event);
-          break;
-        case 'permission_granted':
-          _handlePermissionGranted(event);
-          break;
-        case 'audio_level':
-          _handleAudioLevel(event);
-          break;
-        case 'chunk_uploaded':
-          _handleChunkUploaded(event);
-          break;
-        case 'pending_chunks':
-          await _handlePendingChunks(event);
-          break;
-        case 'network_available':
-          await _handleNetworkAvailable();
-          break;
-      }
-    }
-  }
-
-  void _handleAudioLevel(Map event) {
-    final db = (event['rmsDb'] as num?)?.toDouble();
-    final peak = event['peak'] as int?;
-    bool changed = false;
-    if (_rmsDb != db) {
-      _rmsDb = db;
-      changed = true;
-    }
-    if (_peakLevel != peak) {
-      _peakLevel = peak;
-      changed = true;
-    }
-    if (changed) {
-      notifyListeners();
-    }
-  }
-
-  void _handleChunkUploaded(Map event) {
-    final chunkNumber = event['chunkNumber'] as int?;
-    if (chunkNumber != null) {
-      _uploadedChunks.add('chunk_$chunkNumber');
-      if (chunkNumber + 1 > _chunkCounter) {
-        _chunkCounter = chunkNumber + 1;
-      }
-      notifyListeners();
-      debugPrint('Chunk $chunkNumber uploaded successfully');
-    }
-  }
-
-  /// Handle permission granted event
-  void _handlePermissionGranted(Map event) {
-    final permission = event['permission'] as String?;
-    debugPrint('Permission granted: $permission');
     
-    // Clear any permission-related errors
-    if (_errorMessage?.contains('permission') == true) {
-      _errorMessage = null;
-      notifyListeners();
+    // Initialize platform service
+    _platformService.initialize();
+    
+    // Set up event handler
+    _eventHandler = RecordingEventHandler(
+      stateManager: _stateManager,
+      sessionService: sessionService,
+      platformService: _platformService,
+    );
+    _eventHandler!.initialize();
+    
+    // Listen to state manager changes
+    _stateManager.addListener(_onStateManagerChanged);
+  }
+
+  /// Handle state manager changes and forward to listeners
+  void _onStateManagerChanged() {
+    // Check if timer expired and auto-stop is needed
+    if (_stateManager.hasTimerExpired && _stateManager.isRecording) {
+      stopRecording();
     }
+    
+    notifyListeners();
   }
 
-  /// Handle new audio chunk from native platform: upload via SessionService
-  Future<void> _handleChunkReady(Map event) async {
-    try {
-      final sid = event['sessionId'] as String?;
-      final chunkNum = (event['chunkNumber'] as num?)?.toInt();
-      final filePath = event['filePath'] as String?;
-      final checksum = event['checksum'] as String?;
-      if (sid == null || chunkNum == null || filePath == null) {
-        debugPrint('Chunk ready event missing data: $event');
-        return;
-      }
-
-      if (_sessionService == null) {
-        debugPrint('SessionService not initialized, cannot upload chunk');
-        return;
-      }
-
-      final file = File(filePath);
-      if (!await file.exists()) {
-        debugPrint('Chunk file does not exist: $filePath');
-        return;
-      }
-
-      debugPrint('Uploading chunk $chunkNum for session $sid from $filePath');
-      final ok = await _sessionService!.uploadChunk(sid, chunkNum, file);
-      if (!ok) {
-        debugPrint('Upload failed for chunk $chunkNum, will rely on native retry');
-        return;
-      }
-
-      // Optionally notify server of uploaded chunk
-      try {
-        await _sessionService!.notifyChunkUploaded(sid, chunkNum, checksum: checksum);
-      } catch (_) {}
-
-      // Notify native to mark the chunk as uploaded and clean up file + queue
-      try {
-        await _platform.invokeMethod('markChunkUploaded', {
-          'sessionId': sid,
-          'chunkNumber': chunkNum,
-        });
-      } catch (e) {
-        debugPrint('Failed to notify native of uploaded chunk: $e');
-      }
-
-      // Update UI counters
-      _uploadedChunks.add('chunk_$chunkNum');
-      if (chunkNum + 1 > _chunkCounter) {
-        _chunkCounter = chunkNum + 1;
-      }
-      notifyListeners();
-      debugPrint('Chunk $chunkNum uploaded and marked as complete');
-    } catch (e) {
-      debugPrint('Error handling chunk_ready: $e');
-    }
-  }
-
-  /// Trigger rescan on network available
-  Future<void> _handleNetworkAvailable() async {
-    // Network recovery is now handled natively
-    debugPrint('Network available - native upload system will resume automatically');
-  }
-
-  Future<void> _recoverAllSessionsPending() async {
-    // Recovery is now handled natively in MainActivity.recoverChunkQueue()
-    debugPrint('Session recovery handled natively');
-  }
-
-  /// Recover only the most recent active session's pending chunks on cold start
-  Future<void> _recoverLastSessionPending() async {
-    // Recovery is now handled natively in MainActivity.recoverChunkQueue()
-    debugPrint('Last session recovery handled natively');
-  }
-
-  void _startRetryTimer() {
-    // Retry logic is now handled natively
-    _retryTimer?.cancel();
-    _retryTimer = null;
-  }
-
-  void _stopRetryTimer() {
-    _retryTimer?.cancel();
-    _retryTimer = null;
-  }
-
-  Future<void> _triggerRescanPending() async {
-    // Rescan is now handled natively
-    debugPrint('Rescan handled natively');
-  }
-
-  /// Handle recording stopped event
-  void _handleRecordingStopped(Map event) {
-    final totalChunks = event['totalChunks'] as int?;
-    debugPrint('Recording stopped with $totalChunks total chunks');
+  /// Set recording timer duration
+  void setTimerDuration(Duration? duration) {
+    _stateManager.setTimerDuration(duration);
   }
 
   /// Start recording session
   Future<bool> startRecording(String sessionId) async {
     try {
       if (_sessionService == null) {
-        _setError('Session service not initialized');
+        _stateManager.setError('Session service not initialized');
         return false;
       }
 
       debugPrint('Starting recording for session: $sessionId');
 
-      _setState(RecordingState.recording);
-      _currentSessionId = sessionId;
-      
-      // Only reset chunk counter and uploads for new sessions
-      if (_currentSessionId != sessionId) {
-        _chunkCounter = 0;
-        _uploadedChunks.clear();
-      }
-      
-      _recordingDuration = Duration.zero;
-      _errorMessage = null;
+      // Start native audio recording
+      await _platformService.startRecording(
+        sessionId: sessionId,
+        timerDuration: _stateManager.selectedTimerDuration,
+      );
 
-      // Start the timer for recording duration
-      _startTimer();
-      _startRetryTimer();
-
-      // Start native audio recording (native code will handle server communication)
-      await _platform.invokeMethod('startRecording', {
-        'sessionId': sessionId,
-        'outputFormat': 'wav',
-        'sampleRate': 44100,
-      });
-
-      // Ensure foreground service is running to keep mic alive in background
+      // Ensure foreground service is running
       await MicService.startMic();
 
-      debugPrint('Started recording for session: $sessionId');
+      // Update state manager
+      _stateManager.startSession(sessionId);
+
+      debugPrint('Started recording for session: $sessionId with timer: ${_stateManager.selectedTimerDuration?.inMinutes} minutes');
       return true;
     } on PlatformException catch (e) {
       if (e.code == 'PERMISSION_ERROR') {
-        _setError('Microphone permission required. Please grant permission and try again.');
+        _stateManager.setError('Microphone permission required. Please grant permission and try again.');
       } else {
-        _setError('Failed to start recording: ${e.message}');
+        _stateManager.setError('Failed to start recording: ${e.message}');
       }
       return false;
     } catch (e) {
-      _setError('Unexpected error starting recording: $e');
+      _stateManager.setError('Unexpected error starting recording: $e');
       return false;
     }
   }
@@ -289,34 +114,33 @@ class RecordingProvider extends ChangeNotifier {
   /// Stop recording session
   Future<bool> stopRecording() async {
     try {
-      if (_state != RecordingState.recording) {
+      if (!_stateManager.state.canStop) {
         return false;
       }
 
-      _stopTimer();
-      _stopRetryTimer();
-
-      // Mock platform channel call to stop recording
-      await _platform.invokeMethod('stopRecording');
+      // Stop native recording
+      await _platformService.stopRecording();
 
       // Stop foreground mic service
       await MicService.stopMic();
 
-      _setState(RecordingState.stopped);
-      debugPrint('Stopped recording for session: $_currentSessionId');
+      // Update state manager
+      _stateManager.stopSession();
+
+      debugPrint('Stopped recording for session: ${currentSessionId}');
       
-      final sessionId = _currentSessionId;
-      _currentSessionId = null;
       try {
-        await _platform.invokeMethod('clearLastActiveSession');
-      } catch (_) {}
+        await _platformService.clearLastActiveSession();
+      } catch (e) {
+        debugPrint('Failed to clear last active session: $e');
+      }
       
       return true;
     } on PlatformException catch (e) {
-      _setError('Failed to stop recording: ${e.message}');
+      _stateManager.setError('Failed to stop recording: ${e.message}');
       return false;
     } catch (e) {
-      _setError('Unexpected error stopping recording: $e');
+      _stateManager.setError('Unexpected error stopping recording: $e');
       return false;
     }
   }
@@ -324,18 +148,17 @@ class RecordingProvider extends ChangeNotifier {
   /// Pause recording
   Future<bool> pauseRecording() async {
     try {
-      if (_state != RecordingState.recording) {
+      if (!_stateManager.state.canPause) {
         return false;
       }
 
-      _stopTimer();
-      await _platform.invokeMethod('pauseRecording');
-      _setState(RecordingState.paused);
+      await _platformService.pauseRecording();
+      _stateManager.pauseSession();
       
-      debugPrint('Paused recording for session: $_currentSessionId');
+      debugPrint('Paused recording for session: $currentSessionId');
       return true;
     } on PlatformException catch (e) {
-      _setError('Failed to pause recording: ${e.message}');
+      _stateManager.setError('Failed to pause recording: ${e.message}');
       return false;
     }
   }
@@ -343,20 +166,17 @@ class RecordingProvider extends ChangeNotifier {
   /// Resume recording
   Future<bool> resumeRecording() async {
     try {
-      if (_state != RecordingState.paused) {
+      if (!_stateManager.state.canResume) {
         return false;
       }
-
-      _startTimer();
-      _startRetryTimer();
-      await _platform.invokeMethod('resumeRecording');
-      _setState(RecordingState.recording);
       
-      debugPrint('Resumed recording for session: $_currentSessionId');
-      _triggerRescanPending();
+      await _platformService.resumeRecording();
+      _stateManager.resumeSession();
+      
+      debugPrint('Resumed recording for session: $currentSessionId');
       return true;
     } on PlatformException catch (e) {
-      _setError('Failed to resume recording: ${e.message}');
+      _stateManager.setError('Failed to resume recording: ${e.message}');
       return false;
     }
   }
@@ -364,9 +184,8 @@ class RecordingProvider extends ChangeNotifier {
   /// Set microphone gain on native recorder
   Future<void> setGain(double newGain) async {
     try {
-      await _platform.invokeMethod('setGain', { 'gain': newGain });
-      _gain = newGain;
-      notifyListeners();
+      await _platformService.setGain(newGain);
+      _stateManager.updateGain(newGain);
     } catch (e) {
       debugPrint('Failed to set gain: $e');
     }
@@ -375,96 +194,168 @@ class RecordingProvider extends ChangeNotifier {
   /// Fetch current gain from native
   Future<double> fetchGain() async {
     try {
-      final g = await _platform.invokeMethod<double>('getGain');
-      if (g != null) {
-        _gain = g;
-        notifyListeners();
-      }
+      final gain = await _platformService.getGain();
+      _stateManager.updateGain(gain);
+      return gain;
     } catch (e) {
       debugPrint('Failed to get gain: $e');
+      return _stateManager.gain;
     }
-    return _gain;
   }
 
-  /// Configure server URL for native uploads (fire-and-forget)
+  /// Configure server URL for native uploads
   void setServerUrl(String url) {
-    unawaited(() async {
-      try {
-        await _platform.invokeMethod('setServerUrl', {'url': url});
-        debugPrint('Server URL configured: $url');
-      } catch (e) {
-        debugPrint('Failed to set server URL: $e');
-      }
-    }());
+    _platformService.setServerUrl(url);
   }
 
   /// Force resume chunk processing (useful after network issues)
   Future<void> forceResumeProcessing() async {
-    try {
-      await _platform.invokeMethod('forceResumeProcessing');
-      debugPrint('Force resumed chunk processing');
-    } catch (e) {
-      debugPrint('Failed to force resume processing: $e');
-    }
+    await _platformService.forceResumeProcessing();
   }
 
   /// Get current queue status
   Future<Map<String, dynamic>?> getQueueStatus() async {
-    try {
-      final status = await _platform.invokeMethod<Map<dynamic, dynamic>>('getQueueStatus');
-      return status?.cast<String, dynamic>();
-    } catch (e) {
-      debugPrint('Failed to get queue status: $e');
-      return null;
+    return await _platformService.getQueueStatus();
+  }
+
+  /// Share current session summary
+  Future<void> shareSessionSummary({Rect? sharePositionOrigin}) async {
+    final session = _stateManager.currentSession;
+    if (session == null) {
+      throw Exception('No active session to share');
     }
+
+    try {
+      await ShareService.shareSessionSummary(
+        sessionId: session.id,
+        recordingDuration: session.duration,
+        totalChunks: session.totalChunks,
+        uploadedChunks: _stateManager.uploadedChunks,
+        additionalNotes: session.isTimerEnabled 
+            ? 'Timer: ${session.timerDuration?.inMinutes ?? 0} minutes'
+            : null,
+        sharePositionOrigin: sharePositionOrigin,
+      );
+      debugPrint('Session summary shared for: ${session.id}');
+    } catch (e) {
+      debugPrint('Failed to share session summary: $e');
+      rethrow;
+    }
+  }
+
+  /// Share session audio files
+  Future<void> shareSessionAudio({Rect? sharePositionOrigin}) async {
+    final session = _stateManager.currentSession;
+    if (session == null) {
+      throw Exception('No active session to share');
+    }
+
+    try {
+      // Get audio files from native
+      final audioFiles = await _platformService.getSessionAudioFiles(session.id);
+      
+      if (audioFiles.isEmpty) {
+        throw Exception('No audio files available for this session');
+      }
+
+      await ShareService.shareAudioFiles(
+        filePaths: audioFiles,
+        text: 'Medical transcription audio recording - Session: ${session.id}',
+        subject: 'Audio Recording - ${session.id}',
+        sharePositionOrigin: sharePositionOrigin,
+      );
+      debugPrint('Session audio shared for: ${session.id} (${audioFiles.length} files)');
+    } catch (e) {
+      debugPrint('Failed to share session audio: $e');
+      rethrow;
+    }
+  }
+
+  /// Share complete session (audio + summary)
+  Future<void> shareCompleteSession({Rect? sharePositionOrigin}) async {
+    final session = _stateManager.currentSession;
+    if (session == null) {
+      throw Exception('No active session to share');
+    }
+
+    try {
+      // Get audio files from native
+      final audioFiles = await _platformService.getSessionAudioFiles(session.id);
+      
+      await ShareService.shareSessionComplete(
+        sessionId: session.id,
+        recordingDuration: session.duration,
+        totalChunks: session.totalChunks,
+        uploadedChunks: _stateManager.uploadedChunks,
+        audioFilePaths: audioFiles,
+        additionalNotes: session.isTimerEnabled 
+            ? 'Timer: ${session.timerDuration?.inMinutes ?? 0} minutes'
+            : null,
+        sharePositionOrigin: sharePositionOrigin,
+      );
+      debugPrint('Complete session shared for: ${session.id}');
+    } catch (e) {
+      debugPrint('Failed to share complete session: $e');
+      rethrow;
+    }
+  }
+
+  /// Share session link (if server URL is available)
+  Future<void> shareSessionLink({Rect? sharePositionOrigin}) async {
+    final session = _stateManager.currentSession;
+    if (session == null) {
+      throw Exception('No active session to share');
+    }
+
+    if (_sessionService == null) {
+      throw Exception('Session service not available');
+    }
+
+    try {
+      await ShareService.shareSessionLink(
+        sessionId: session.id,
+        baseUrl: AppConstants.defaultServerUrl,
+        additionalText: 'Medical Transcription Session\nDuration: ${session.duration}\nChunks: ${session.totalChunks}',
+        sharePositionOrigin: sharePositionOrigin,
+      );
+      debugPrint('Session link shared for: ${session.id}');
+    } catch (e) {
+      debugPrint('Failed to share session link: $e');
+      rethrow;
+    }
+  }
+
+  /// Get available share options for current session
+  List<ShareOption> getAvailableShareOptions() {
+    final session = _stateManager.currentSession;
+    if (session == null) {
+      return [];
+    }
+
+    return ShareService.getShareOptionsForSession(
+      sessionId: session.id,
+      hasAudioFiles: session.totalChunks > 0,
+      isCompleted: session.status.isFinished,
+      serverUrl: AppConstants.defaultServerUrl,
+    );
   }
 
   /// Mock audio chunk generation (for testing)
   void mockChunkUploaded(String chunkId) {
-    _chunkCounter++;
-    _uploadedChunks.add(chunkId);
-    notifyListeners();
+    _stateManager.addUploadedChunk(chunkId, _stateManager.chunkCounter);
   }
 
   /// Reset the provider state
   void reset() {
-    _stopTimer();
-    _setState(RecordingState.stopped);
-    _currentSessionId = null;
-    _chunkCounter = 0;
-    _recordingDuration = Duration.zero;
-    _uploadedChunks.clear();
-    _errorMessage = null;
-  }
-
-  void _setState(RecordingState newState) {
-    _state = newState;
-    notifyListeners();
-  }
-
-  void _setError(String error) {
-    _errorMessage = error;
-    _setState(RecordingState.error);
-    debugPrint('Recording error: $error');
-  }
-
-  void _startTimer() {
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      _recordingDuration = Duration(seconds: timer.tick);
-      notifyListeners();
-    });
-  }
-
-  void _stopTimer() {
-    _timer?.cancel();
-    _timer = null;
+    _stateManager.reset();
   }
 
   @override
   void dispose() {
-    _stopTimer();
-    _stopRetryTimer();
-    _eventSubscription?.cancel();
+    _eventHandler?.dispose();
+    _platformService.dispose();
+    _stateManager.removeListener(_onStateManagerChanged);
+    _stateManager.dispose();
     super.dispose();
   }
 }

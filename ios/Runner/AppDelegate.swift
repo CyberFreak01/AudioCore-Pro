@@ -57,8 +57,10 @@ import BackgroundTasks
           result(FlutterError(code: "ARG_ERROR", message: "Missing args", details: nil))
           return
         }
+        let timerDuration = args?["timerDuration"] as? Double
+        let timerDurationSeconds = timerDuration != nil ? timerDuration! / 1000.0 : nil
         do {
-          try AudioManager.shared.startRecording(sessionId: sessionId, sampleRate: sampleRate)
+          try AudioManager.shared.startRecording(sessionId: sessionId, sampleRate: sampleRate, timerDuration: timerDurationSeconds)
           result(true)
         } catch {
           result(FlutterError(code: "START_ERROR", message: error.localizedDescription, details: nil))

@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import android.content.BroadcastReceiver
 import java.net.HttpURLConnection
 import java.net.URL
 import java.io.OutputStream
@@ -51,13 +52,21 @@ class MainActivity: FlutterActivity() {
     private var gainFactor: Float = 1.0f
     private var lastLevelEmitMs: Long = 0
     private var networkReceiver: android.content.BroadcastReceiver? = null
-    private val prefsName = "record_prefs"
+    
+    // Timer functionality
+    private var timerDurationMs: Long? = null
+    private var timerExecutor: ScheduledExecutorService? = null
+    private var recordingStartTime: Long = 0
     private val keyLastActiveSession = "last_active_session"
     private val keyLastActiveAt = "last_active_at"
     private val notifChannelId = "record_control"
     private val notifId = 987654
+    private val prefsName = "medical_transcription_prefs"
     
-    // Chunk queue management
+    // Robust chunk management
+    private lateinit var robustChunkManager: RobustChunkManager
+    private lateinit var networkMonitor: NetworkMonitor
+    private lateinit var backgroundTaskManager: BackgroundTaskManager
     private val chunkQueue = ConcurrentLinkedQueue<ChunkItem>()
     private val nextExpectedChunk = AtomicInteger(0)
     private val isUploading = AtomicBoolean(false)
@@ -65,6 +74,8 @@ class MainActivity: FlutterActivity() {
     private val maxRetries = 3
     private val retryDelays = longArrayOf(1000, 2000, 5000) // 1s, 2s, 5s
     private var serverBaseUrl = "https://scribe-server-production-f150.up.railway.app"
+    private var chunkProcessingReceiver: BroadcastReceiver? = null
+    private var recordingActionReceiver: BroadcastReceiver? = null
     
     data class ChunkItem(
         val sessionId: String,
@@ -87,6 +98,12 @@ class MainActivity: FlutterActivity() {
                     val newSessionId = call.argument<String>("sessionId")
                     val outputFormat = call.argument<String>("outputFormat") ?: "wav"
                     val sampleRate = call.argument<Int>("sampleRate") ?: 44100
+                    val timerDurationArg = call.argument<Any>("timerDuration")
+                    val timerDuration = when (timerDurationArg) {
+                        is Int -> timerDurationArg.toLong()
+                        is Long -> timerDurationArg
+                        else -> null
+                    }
                     
                     // Check for microphone permission first
                     if (!hasRecordAudioPermission()) {
@@ -102,6 +119,7 @@ class MainActivity: FlutterActivity() {
                 chunkQueue.clear()
                     }
                     sessionId = newSessionId
+                    timerDurationMs = timerDuration
                     
                     hapticIfAllowed()
                     if (startAudioRecording(sessionId, sampleRate)) {
@@ -112,6 +130,7 @@ class MainActivity: FlutterActivity() {
                 }
                 "stopRecording" -> {
                     hapticIfAllowed()
+                    stopTimer()
                     if (stopAudioRecording()) {
                         result.success("Recording stopped")
                     } else {
@@ -120,6 +139,7 @@ class MainActivity: FlutterActivity() {
                 }
                 "pauseRecording" -> {
                     hapticIfAllowed()
+                    stopTimer()
                     if (pauseAudioRecording()) {
                         result.success("Recording paused")
                     } else {
@@ -129,6 +149,14 @@ class MainActivity: FlutterActivity() {
                 "resumeRecording" -> {
                     hapticIfAllowed()
                     if (resumeAudioRecording()) {
+                        // Restart timer if it was set and we still have time
+                        if (timerDurationMs != null) {
+                            val elapsed = System.currentTimeMillis() - recordingStartTime
+                            val remaining = timerDurationMs!! - elapsed
+                            if (remaining > 0) {
+                                startTimer(remaining)
+                            }
+                        }
                         result.success("Recording resumed")
                     } else {
                         result.error("RECORDING_ERROR", "Failed to resume recording", null)
@@ -201,12 +229,41 @@ class MainActivity: FlutterActivity() {
                     result.success(true)
                 }
                 "getQueueStatus" -> {
+                    val stats = robustChunkManager.getStatistics()
+                    val networkInfo = networkMonitor.getNetworkInfo()
+                    val workInfo = backgroundTaskManager.getWorkInfo()
+                    
                     val status = mapOf(
-                        "queueSize" to chunkQueue.size,
-                        "nextExpectedChunk" to nextExpectedChunk.get(),
-                        "isUploading" to isUploading.get()
+                        "robustStats" to stats,
+                        "networkInfo" to networkInfo,
+                        "backgroundWork" to workInfo,
+                        "isProcessing" to isUploading.get()
                     )
                     result.success(status)
+                }
+                "recoverChunks" -> {
+                    val stats = robustChunkManager.getStatistics()
+                    val pendingCount = stats["pendingChunks"] as? Int ?: 0
+                    android.util.Log.d("MainActivity", "Manual recovery requested, $pendingCount chunks pending")
+                    processChunkQueue()
+                    result.success(pendingCount)
+                }
+                "getNetworkInfo" -> {
+                    val networkInfo = networkMonitor.getNetworkInfo()
+                    result.success(networkInfo)
+                }
+                "retryFailedChunks" -> {
+                    retryFailedChunks()
+                    result.success(true)
+                }
+                "getSessionAudioFiles" -> {
+                    val sid = call.argument<String>("sessionId")
+                    if (sid != null) {
+                        val audioFiles = getSessionAudioFiles(sid)
+                        result.success(audioFiles)
+                    } else {
+                        result.error("INVALID_SESSION", "Session ID is required", null)
+                    }
                 }
                 else -> {
                     result.notImplemented()
@@ -254,9 +311,13 @@ class MainActivity: FlutterActivity() {
             }
         }
 
+        // Initialize enhanced chunk management system
+        initializeChunkManagement()
+        
         registerAudioRouteReceivers()
         registerNetworkAvailableReceiver()
         registerRecordingActionReceiver()
+        registerChunkProcessingReceiver()
         ensureControlNotificationChannel()
 
         // On Android 13+, request notification permission once at startup to show controls
@@ -266,8 +327,10 @@ class MainActivity: FlutterActivity() {
             } catch (_: Exception) {}
         }
         
-        // Recover any pending chunks from previous session
-        recoverChunkQueue()
+        // Schedule background tasks and recovery
+        backgroundTaskManager.scheduleChunkUploadWork()
+        backgroundTaskManager.scheduleCleanupWork()
+        backgroundTaskManager.scheduleChunkRecoveryWork()
     }
 
     private fun startAudioRecording(sessionId: String?, sampleRate: Int): Boolean {
@@ -294,9 +357,15 @@ class MainActivity: FlutterActivity() {
 
             audioRecord?.startRecording()
             isRecording = true
+            recordingStartTime = System.currentTimeMillis()
             // Only reset chunk counter when starting a completely new session
             // Keep incrementing for pause/resume within same session
             chunkBuffer.clear()
+            
+            // Start timer if duration is set
+            timerDurationMs?.let { duration ->
+                startTimer(duration)
+            }
 
             // Persist last active session for crash/kill recovery
             sessionId?.let {
@@ -349,6 +418,30 @@ class MainActivity: FlutterActivity() {
             return false
         }
     }
+    
+    private fun startTimer(durationMs: Long) {
+        stopTimer() // Stop any existing timer
+        
+        timerExecutor = Executors.newSingleThreadScheduledExecutor()
+        timerExecutor?.schedule({
+            // Auto-stop recording when timer expires
+            if (isRecording) {
+                android.util.Log.d("MainActivity", "Recording timer expired, auto-stopping...")
+                stopAudioRecording()
+                // Notify Flutter that recording stopped due to timer
+                eventSink?.success(mapOf(
+                    "type" to "recording_stopped",
+                    "reason" to "timer_expired",
+                    "totalChunks" to chunkCounter
+                ))
+            }
+        }, durationMs, TimeUnit.MILLISECONDS)
+    }
+    
+    private fun stopTimer() {
+        timerExecutor?.shutdown()
+        timerExecutor = null
+    }
 
     private fun saveAndStreamChunk(audioData: ByteArray) {
         try {
@@ -361,19 +454,23 @@ class MainActivity: FlutterActivity() {
             // Write WAV header and audio data
             writeWavFile(chunkFile, audioData, 44100)
 
-            // Add to ordered queue instead of immediate upload
-            val chunkItem = ChunkItem(
-                sessionId = sessionId!!,
-                chunkNumber = chunkCounter,
-                filePath = chunkFile.absolutePath
-            )
-            chunkQueue.offer(chunkItem)
-            
-            // Start upload process if not already running
-            startOrderedUpload()
+            // Add to robust chunk manager with immediate persistence
+            val success = robustChunkManager.addChunk(sessionId!!, chunkCounter, chunkFile.absolutePath)
+            if (success) {
+                android.util.Log.d("MainActivity", "Chunk $chunkCounter saved and persisted successfully")
+                
+                // Start upload process immediately if network is available
+                if (networkMonitor.isUploadRecommended()) {
+                    android.util.Log.d("MainActivity", "Network available - processing chunks")
+                    processChunkQueue()
+                }
+            } else {
+                android.util.Log.e("MainActivity", "Failed to persist chunk $chunkCounter")
+            }
             
             chunkCounter++
         } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to save chunk: ${e.message}", e)
             runOnUiThread {
                 eventSink?.error("CHUNK_ERROR", "Failed to save chunk: ${e.message}", null)
             }
@@ -610,45 +707,85 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun showControlNotification() {
-    try {
+        try {
+            // Create explicit intents with the component name
             val stopIntent = Intent(this, NotificationActionReceiver::class.java).apply { 
-            action = "ACTION_STOP"
-            // Add these flags for better reliability
-            addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-        }
-            val pauseIntent = Intent(this, NotificationActionReceiver::class.java).apply { 
-                action = if (isRecording) "ACTION_PAUSE" else "ACTION_RESUME"
+                action = "com.example.medicalscribe.RECORDING_ACTION"
+                putExtra("action", "stop")
+                addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+            }
+            
+            val pauseResumeIntent = Intent(this, NotificationActionReceiver::class.java).apply { 
+                action = "com.example.medicalscribe.RECORDING_ACTION"
+                putExtra("action", if (isRecording) "pause" else "resume")
                 addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             }
 
-        val stopPi = PendingIntent.getBroadcast(
-            this, 
-            100, 
-            stopIntent, 
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-            val pausePi = PendingIntent.getBroadcast(
-            this, 
-            101, 
-            pauseIntent, 
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+            val stopPi = PendingIntent.getBroadcast(
+                this, 
+                100, 
+                stopIntent, 
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            
+            val pauseResumePi = PendingIntent.getBroadcast(
+                this, 
+                101, 
+                pauseResumeIntent, 
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            )
 
-        val builder = NotificationCompat.Builder(this, notifChannelId)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Recording in progress")
-                .setContentText(if (isRecording) "Tap to pause or stop" else "Paused: tap to resume or stop")
-            .setOngoing(true)
-            .setSilent(true)
-                .addAction(NotificationCompat.Action(0, if (isRecording) "Pause" else "Resume", pausePi))
-            .addAction(NotificationCompat.Action(0, "Stop", stopPi))
-            .setAutoCancel(false) // Prevent accidental dismissal
+            val builder = NotificationCompat.Builder(this, notifChannelId)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle(if (isRecording) "Recording in progress" else "Recording paused")
+                .setContentText(if (isRecording) "Tap to pause or stop" else "Tap to resume or stop")
+                .setOngoing(true)
+                .setSilent(true)
+                .addAction(
+                    if (!isRecording)
+                        NotificationCompat.Action(
+                            android.R.drawable.ic_media_play, 
+                            "Resume", 
+                            pauseResumePi
+                        )
+                    else 
+                        NotificationCompat.Action(
+                            android.R.drawable.ic_media_pause, 
+                            "Pause", 
+                            pauseResumePi
+                        )
+                )
+                .addAction(
+                    NotificationCompat.Action(
+                        R.drawable.ic_media_stop, 
+                        "Stop", 
+                        stopPi
+                    )
+                )
+                .setAutoCancel(false) // Prevent accidental dismissal
+                .setContentIntent(
+                    PendingIntent.getActivity(
+                        this,
+                        0,
+                        packageManager.getLaunchIntentForPackage(packageName),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
 
-        val nm = getSystemService(NotificationManager::class.java)
-        nm?.notify(notifId, builder.build())
-    } catch (e: Exception) {
-        android.util.Log.e("MainActivity", "Failed to show notification", e)
-    }
+            val notification = builder.build()
+
+            // Start service and post the notification
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                startForegroundService(Intent(this, MicService::class.java))
+            } else {
+                @Suppress("DEPRECATION")
+                startService(Intent(this, MicService::class.java))
+            }
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(notifId, notification)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to show notification", e)
+        }
 }
 
     private fun cancelControlNotification() {
@@ -660,142 +797,8 @@ class MainActivity: FlutterActivity() {
 
     // Ordered chunk upload system
     private fun startOrderedUpload() {
-        if (isUploading.compareAndSet(false, true)) {
-            uploadExecutor.execute {
-                processChunkQueue()
-            }
-        }
-    }
-
-    private fun processChunkQueue() {
-        try {
-            var consecutiveFailures = 0
-            val maxConsecutiveFailures = 3
-            
-            while (true) {
-                val expectedChunk = nextExpectedChunk.get()
-                val chunkToProcess = findChunkByNumber(expectedChunk)
-                
-                if (chunkToProcess == null) {
-                    // Check if we have any chunks in queue at all
-                    if (chunkQueue.isEmpty()) {
-                        android.util.Log.d("MainActivity", "No more chunks in queue, processing complete")
-                        break
-                    }
-                    
-                    // Check if we have chunks with higher numbers (gap detection)
-                    val nextAvailableChunk = chunkQueue.minByOrNull { it.chunkNumber }
-                    if (nextAvailableChunk != null && nextAvailableChunk.chunkNumber > expectedChunk) {
-                        android.util.Log.w("MainActivity", "Gap detected: expected chunk $expectedChunk, but next available is ${nextAvailableChunk.chunkNumber}")
-                        // Skip to the next available chunk
-                        nextExpectedChunk.set(nextAvailableChunk.chunkNumber)
-                        continue
-                    }
-                    
-                    // No chunk available for this number yet, wait a bit
-                    Thread.sleep(100)
-                    continue
-                }
-                
-                val success = uploadChunkToServer(chunkToProcess)
-                
-                if (success) {
-                    consecutiveFailures = 0 // Reset failure counter
-                    // Move to next expected chunk
-                    nextExpectedChunk.incrementAndGet()
-                    
-                    // Notify Flutter of successful upload
-                    runOnUiThread {
-                        eventSink?.success(mapOf(
-                            "type" to "chunk_uploaded",
-                            "sessionId" to chunkToProcess.sessionId,
-                            "chunkNumber" to chunkToProcess.chunkNumber
-                        ))
-                    }
-                } else {
-                    consecutiveFailures++
-                    android.util.Log.w("MainActivity", "Upload failed for chunk ${chunkToProcess.chunkNumber}, consecutive failures: $consecutiveFailures")
-                    
-                    if (consecutiveFailures >= maxConsecutiveFailures) {
-                        android.util.Log.e("MainActivity", "Too many consecutive failures ($consecutiveFailures), stopping processing")
-                        break
-                    }
-                    
-                    // Handle retry logic
-                    handleChunkRetry(chunkToProcess)
-                    break // Exit to allow retry scheduling
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Error in chunk queue processing", e)
-        } finally {
-            isUploading.set(false)
-        }
-    }
-
-    private fun findChunkByNumber(chunkNumber: Int): ChunkItem? {
-        return chunkQueue.firstOrNull { it.chunkNumber == chunkNumber }
-    }
-
-    private fun uploadChunkToServer(chunk: ChunkItem): Boolean {
-        return try {
-            val file = File(chunk.filePath)
-            if (!file.exists()) {
-                android.util.Log.w("MainActivity", "Chunk file not found: ${chunk.filePath}")
-                return false
-            }
-            
-            // Step 1: Get presigned URL from server
-            val presignedUrl = getPresignedUrl(chunk.sessionId, chunk.chunkNumber)
-            if (presignedUrl == null) {
-                android.util.Log.w("MainActivity", "Failed to get presigned URL for chunk ${chunk.chunkNumber}")
-                return false
-            }
-            
-            // Step 2: Upload chunk to server
-            val uploadSuccess = uploadChunkFile(presignedUrl, file)
-            if (!uploadSuccess) {
-                android.util.Log.w("MainActivity", "Failed to upload chunk file ${chunk.chunkNumber}")
-                return false
-            }
-            
-            // Step 3: Notify server of successful upload
-            val notifySuccess = notifyChunkUploaded(chunk.sessionId, chunk.chunkNumber)
-            if (!notifySuccess) {
-                android.util.Log.w("MainActivity", "Failed to notify server of chunk ${chunk.chunkNumber}")
-                return false
-            }
-            
-            // Step 4: Clean up chunk file and remove from queue on success
-            cleanupChunkOnSuccess(chunk)
-            
-            android.util.Log.d("MainActivity", "Successfully uploaded and cleaned up chunk ${chunk.chunkNumber}")
-            true
-        } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Upload failed for chunk ${chunk.chunkNumber}", e)
-            false
-        }
-    }
-    
-    private fun cleanupChunkOnSuccess(chunk: ChunkItem) {
-        try {
-            // Remove chunk from queue
-            chunkQueue.remove(chunk)
-            
-            // Delete chunk file from storage
-            val file = File(chunk.filePath)
-            if (file.exists()) {
-                val deleted = file.delete()
-                android.util.Log.d("MainActivity", "Deleted chunk file ${chunk.filePath}: $deleted")
-            }
-            
-            // Update pending chunks file
-            markChunkAsUploaded(chunk.sessionId, chunk.chunkNumber)
-            
-            android.util.Log.d("MainActivity", "Cleaned up chunk ${chunk.chunkNumber} from queue and storage")
-        } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Error cleaning up chunk ${chunk.chunkNumber}", e)
-        }
+        // Legacy method - now delegates to robust chunk processing
+        processChunkQueue()
     }
     
     private fun getPresignedUrl(sessionId: String, chunkNumber: Int): String? {
@@ -920,36 +923,8 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun handleChunkRetry(chunk: ChunkItem) {
-        if (chunk.retryCount >= maxRetries) {
-            android.util.Log.e("MainActivity", "Max retries exceeded for chunk ${chunk.chunkNumber}, removing from queue")
-            // Remove from queue after max retries
-            chunkQueue.remove(chunk)
-            // Try to continue with next chunk
-            uploadExecutor.schedule({
-                if (isUploading.compareAndSet(false, true)) {
-                    processChunkQueue()
-                }
-            }, 1000, TimeUnit.MILLISECONDS)
-            return
-        }
-        
-        val retryDelay = if (chunk.retryCount < retryDelays.size) {
-            retryDelays[chunk.retryCount]
-        } else {
-            retryDelays.last()
-        }
-        
-        val retryChunk = chunk.copy(retryCount = chunk.retryCount + 1)
-        chunkQueue.remove(chunk)
-        chunkQueue.offer(retryChunk)
-        
-        android.util.Log.d("MainActivity", "Scheduling retry ${chunk.retryCount + 1} for chunk ${chunk.chunkNumber} in ${retryDelay}ms")
-        
-        uploadExecutor.schedule({
-            if (isUploading.compareAndSet(false, true)) {
-                processChunkQueue()
-            }
-        }, retryDelay, TimeUnit.MILLISECONDS)
+        // Legacy method - now handled by robust chunk manager
+        android.util.Log.d("MainActivity", "Chunk retry handled by robust chunk manager")
     }
     
     // Force resume processing (can be called from Flutter)
@@ -994,11 +969,13 @@ class MainActivity: FlutterActivity() {
                         "type" to "network_available"
                     ))
                 }
-                // Resume upload processing when network is available with delay
-                android.util.Log.d("MainActivity", "Network available, resuming upload processing")
+                // Resume upload processing when network is available - be aggressive
+                android.util.Log.d("MainActivity", "Network available broadcast received - resuming upload processing immediately")
+                
+                // Process chunk queue immediately
                 uploadExecutor.schedule({
-                    startOrderedUpload()
-                }, 1000, TimeUnit.MILLISECONDS)
+                    processChunkQueue()
+                }, 200, TimeUnit.MILLISECONDS)
             }
         }
         if (android.os.Build.VERSION.SDK_INT >= 33) {
@@ -1010,32 +987,102 @@ class MainActivity: FlutterActivity() {
     }
 
     private fun registerRecordingActionReceiver() {
-    val filter = IntentFilter("com.example.medicalscribe.RECORDING_ACTION")
-    val recordingActionReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: android.content.Context?, intent: Intent?) {
-            val action = intent?.getStringExtra("action")
-            when (action) {
-                "stop" -> {
-                    hapticIfAllowed()
-                    stopAudioRecording()
-                }
-                "pause" -> {
-                    hapticIfAllowed()
-                    pauseAudioRecording()
-                }
-                "resume" -> {
-                    hapticIfAllowed()
-                    resumeAudioRecording()
+        val filter = IntentFilter("com.example.medicalscribe.RECORDING_ACTION")
+        recordingActionReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: Intent?) {
+                val action = intent?.getStringExtra("action")
+                android.util.Log.d("MainActivity", "Received notification action: $action")
+                when (action) {
+                    "stop" -> {
+                        hapticIfAllowed()
+                        stopTimer()
+                        stopAudioRecording()
+                        cancelControlNotification()
+                        // Notify Flutter that recording was stopped from notification
+                        runOnUiThread {
+                            eventSink?.success(mapOf(
+                                "type" to "recording_state_changed",
+                                "state" to "stopped",
+                                "source" to "notification",
+                                "sessionId" to sessionId,
+                                "totalChunks" to chunkCounter
+                            ))
+                        }
+                    }
+                    "pause" -> {
+                        hapticIfAllowed()
+                        if (isRecording) {
+                            stopTimer()
+                            pauseAudioRecording()
+                            showControlNotification() // Update notification to show resume button
+                            // Notify Flutter that recording was paused from notification
+                            runOnUiThread {
+                                val elapsed = System.currentTimeMillis() - recordingStartTime
+                                val remainingMs = if (timerDurationMs != null) {
+                                    maxOf(0, timerDurationMs!! - elapsed)
+                                } else null
+                                
+                                eventSink?.success(mapOf(
+                                    "type" to "recording_state_changed",
+                                    "state" to "paused",
+                                    "source" to "notification",
+                                    "sessionId" to sessionId,
+                                    "remainingTimeMs" to remainingMs
+                                ))
+                            }
+                        }
+                    }
+                    "resume" -> {
+                        hapticIfAllowed()
+                        if (!isRecording) {
+                            resumeAudioRecording()
+                            // Restart timer if it was set and we still have time
+                            if (timerDurationMs != null) {
+                                val elapsed = System.currentTimeMillis() - recordingStartTime
+                                val remaining = timerDurationMs!! - elapsed
+                                if (remaining > 0) {
+                                    startTimer(remaining)
+                                }
+                            }
+                            showControlNotification() // Update notification to show pause button
+                            // Notify Flutter that recording was resumed from notification
+                            runOnUiThread {
+                                val elapsed = System.currentTimeMillis() - recordingStartTime
+                                val remainingMs = if (timerDurationMs != null) {
+                                    maxOf(0, timerDurationMs!! - elapsed)
+                                } else null
+                                
+                                eventSink?.success(mapOf(
+                                    "type" to "recording_state_changed",
+                                    "state" to "recording",
+                                    "source" to "notification",
+                                    "sessionId" to sessionId,
+                                    "remainingTimeMs" to remainingMs
+                                ))
+                            }
+                        }
+                    }
                 }
             }
         }
-    }
-    
-    if (android.os.Build.VERSION.SDK_INT >= 33) {
-        registerReceiver(recordingActionReceiver, filter, RECEIVER_NOT_EXPORTED)
-    } else {
-        @Suppress("DEPRECATION")
-        registerReceiver(recordingActionReceiver, filter)
+        
+        recordingActionReceiver?.let { receiver ->
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 34) {
+                    // For Android 14+ we need to use the exported flag
+                    registerReceiver(receiver, filter, RECEIVER_EXPORTED)
+                } else if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    // For Android 13
+                    registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED)
+                } else {
+                    // For older versions
+                    @Suppress("DEPRECATION")
+                    registerReceiver(receiver, filter)
+                }
+                android.util.Log.d("MainActivity", "Registered recording action receiver")
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error registering receiver", e)
+            }
         }
     }
 
@@ -1055,12 +1102,20 @@ class MainActivity: FlutterActivity() {
 
     private fun markChunkAsUploaded(sid: String, number: Int) {
         try {
+            // Legacy method - now handled by robust chunk manager
+            android.util.Log.d("MainActivity", "Chunk marked as uploaded: $number")
+            
+            // Legacy file-based tracking for compatibility
             val dir = File(filesDir, "audio_chunks/$sid")
             val file = File(dir, "pending.txt")
             if (!file.exists()) return
             val lines = file.readLines().filterNot { it.trim() == "chunk_$number" }
             file.writeText(lines.joinToString("\n", postfix = if (lines.isNotEmpty()) "\n" else ""))
-        } catch (_: Exception) {}
+            
+            android.util.Log.d("MainActivity", "Marked chunk $number as uploaded for session $sid")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error marking chunk as uploaded", e)
+        }
     }
 
     private fun getPendingChunks(sid: String): List<Int> {
@@ -1192,8 +1247,337 @@ class MainActivity: FlutterActivity() {
             .apply()
     }
 
+    /**
+     * Initialize enhanced chunk management system
+     */
+    private fun initializeChunkManagement() {
+        try {
+            robustChunkManager = RobustChunkManager(this)
+            networkMonitor = NetworkMonitor(this)
+            backgroundTaskManager = BackgroundTaskManager(this)
+            
+            // Start network monitoring
+            networkMonitor.startMonitoring { networkState ->
+                android.util.Log.d("MainActivity", "Network state changed: $networkState")
+                
+                // Resume chunk processing when network becomes available
+                if (networkState.isAvailable) {
+                    android.util.Log.d("MainActivity", "Network recovered - resuming chunk uploads immediately")
+                    
+                    // Immediate upload attempt
+                    uploadExecutor.schedule({
+                        startOrderedUpload()
+                    }, 500, TimeUnit.MILLISECONDS)
+                    
+                    // Trigger chunk processing
+                    uploadExecutor.schedule({
+                        processChunkQueue()
+                    }, 500, TimeUnit.MILLISECONDS)
+                }
+                
+                // Notify Flutter about network changes
+                runOnUiThread {
+                    eventSink?.success(mapOf(
+                        "type" to "network_state_changed",
+                        "networkState" to mapOf(
+                            "isAvailable" to networkState.isAvailable,
+                            "isWifi" to networkState.isWifi,
+                            "isMetered" to networkState.isMetered,
+                            "connectionType" to networkState.connectionType,
+                            "uploadBatchSize" to networkState.uploadBatchSize
+                        )
+                    ))
+                }
+            }
+            
+            android.util.Log.d("MainActivity", "Enhanced chunk management system initialized")
+            
+            // Initialize robust chunk manager with automatic recovery
+            val recoveredCount = robustChunkManager.initialize()
+            android.util.Log.d("MainActivity", "Robust chunk manager initialized, recovered $recoveredCount chunks")
+            
+            // Immediately start processing recovered chunks if any exist
+            if (recoveredCount > 0) {
+                android.util.Log.d("MainActivity", "Starting immediate processing of $recoveredCount recovered chunks")
+                
+                // Start processing immediately (no delay)
+                uploadExecutor.execute {
+                    processChunkQueue()
+                }
+                
+                // Notify Flutter about recovery
+                runOnUiThread {
+                    eventSink?.success(mapOf(
+                        "type" to "chunks_recovered",
+                        "count" to recoveredCount
+                    ))
+                }
+            } else {
+                android.util.Log.d("MainActivity", "No chunks to recover")
+            }
+            
+            // Start continuous background processing system
+            startContinuousBackgroundProcessing()
+            
+            // Schedule periodic chunk processing to ensure nothing gets stuck
+            uploadExecutor.scheduleWithFixedDelay({
+                try {
+                    val stats = robustChunkManager.getStatistics()
+                    val pendingCount = stats["pendingChunks"] as? Int ?: 0
+                    if (pendingCount > 0 && networkMonitor.isUploadRecommended()) {
+                        android.util.Log.d("MainActivity", "Periodic check: Processing $pendingCount pending chunks")
+                        processChunkQueue()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "Error in periodic chunk processing", e)
+                }
+            }, 10, 10, TimeUnit.SECONDS) // Check every 10 seconds (more frequent)
+            
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to initialize chunk management", e)
+        }
+    }
+    
+    /**
+     * Start continuous background processing system
+     */
+    private fun startContinuousBackgroundProcessing() {
+        try {
+            android.util.Log.d("MainActivity", "Starting continuous background processing system")
+            
+            // Start foreground service for continuous processing while app is open
+            backgroundTaskManager.startChunkUploadService()
+            
+            // Schedule WorkManager tasks for background processing when app is closed
+            backgroundTaskManager.scheduleContinuousUploadWork()
+            backgroundTaskManager.scheduleChunkRecoveryWork()
+            
+            android.util.Log.d("MainActivity", "Continuous background processing system started")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to start continuous background processing", e)
+        }
+    }
+    
+    /**
+     * Process chunk queue using RobustChunkManager
+     */
+    private fun processChunkQueue() {
+        if (!::robustChunkManager.isInitialized || !networkMonitor.isUploadRecommended()) {
+            return
+        }
+        
+        uploadExecutor.execute {
+            try {
+                val batchSize = networkMonitor.getOptimalBatchSize()
+                val chunks = robustChunkManager.getNextChunkBatch(batchSize)
+                
+                if (chunks.isNotEmpty()) {
+                    android.util.Log.d("MainActivity", "Processing ${chunks.size} chunks from robust queue")
+                    
+                    for (chunk in chunks) {
+                        // Mark as uploading
+                        robustChunkManager.markChunkUploading(chunk.id)
+                        
+                        // Upload chunk
+                        val success = uploadChunkToServer(chunk)
+                        
+                        if (success) {
+                            // Mark as completed and cleanup
+                            robustChunkManager.markChunkCompleted(chunk.id, chunk.filePath)
+                            android.util.Log.d("MainActivity", "Chunk ${chunk.chunkNumber} uploaded and completed")
+                            
+                            // Notify Flutter
+                            runOnUiThread {
+                                eventSink?.success(mapOf(
+                                    "type" to "chunk_uploaded",
+                                    "sessionId" to chunk.sessionId,
+                                    "chunkNumber" to chunk.chunkNumber
+                                ))
+                            }
+                        } else {
+                            // Handle failure with retry logic
+                            val newRetryCount = chunk.retryCount + 1
+                            robustChunkManager.markChunkFailed(chunk.id, newRetryCount)
+                            android.util.Log.w("MainActivity", "Chunk ${chunk.chunkNumber} upload failed, retry count: $newRetryCount")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Error processing chunk queue", e)
+            }
+        }
+    }
+    
+    /**
+     * Upload chunk to server using existing logic
+     */
+    private fun uploadChunkToServer(chunk: RobustChunkManager.ChunkItem): Boolean {
+        return try {
+            val file = File(chunk.filePath)
+            if (!file.exists()) {
+                android.util.Log.e("MainActivity", "Chunk file not found: ${chunk.filePath}")
+                return false
+            }
+            
+            // Use existing upload logic
+            val presignedUrl = getPresignedUrl(chunk.sessionId, chunk.chunkNumber)
+            if (presignedUrl != null) {
+                uploadChunkFile(presignedUrl, file)
+            } else {
+                android.util.Log.e("MainActivity", "Failed to get presigned URL for chunk ${chunk.chunkNumber}")
+                false
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error uploading chunk to server", e)
+            false
+        }
+    }
+
+    /**
+     * Register receiver for chunk processing broadcasts from background workers
+     */
+    private fun registerChunkProcessingReceiver() {
+        val filter = IntentFilter().apply {
+            addAction("com.example.medicalscribe.PROCESS_CHUNKS")
+            addAction("com.example.medicalscribe.RECOVER_CHUNKS")
+            addAction("com.example.medicalscribe.CLEANUP_CHUNKS")
+        }
+        
+        chunkProcessingReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: Intent?) {
+                when (intent?.action) {
+                    "com.example.medicalscribe.PROCESS_CHUNKS" -> {
+                        android.util.Log.d("MainActivity", "Processing chunks from background worker")
+                        startOrderedUpload()
+                    }
+                    "com.example.medicalscribe.RECOVER_CHUNKS" -> {
+                        android.util.Log.d("MainActivity", "Recovering chunks from background worker")
+                        val stats = robustChunkManager.getStatistics()
+                        val pendingCount = stats["pendingChunks"] as? Int ?: 0
+                        android.util.Log.d("MainActivity", "Found $pendingCount pending chunks")
+                        
+                        // Notify Flutter about recovery
+                        runOnUiThread {
+                            eventSink?.success(mapOf(
+                                "type" to "chunks_recovered",
+                                "recoveredCount" to pendingCount
+                            ))
+                        }
+                    }
+                    "com.example.medicalscribe.CLEANUP_CHUNKS" -> {
+                        android.util.Log.d("MainActivity", "Cleaning up old chunks from background worker")
+                        // Cleanup is now handled automatically by robust chunk manager
+                        android.util.Log.d("MainActivity", "Cleanup handled by robust chunk manager")
+                    }
+                }
+            }
+        }
+        
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(chunkProcessingReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(chunkProcessingReceiver, filter)
+        }
+    }
+    
+    /**
+     * Retry failed chunks
+     */
+    private fun retryFailedChunks() {
+        try {
+            android.util.Log.d("MainActivity", "Retrying failed chunks")
+            
+            // Get robust queue stats to find failed chunks
+            val stats = robustChunkManager.getStatistics()
+            val failedCount = stats["failedChunks"] as? Int ?: 0
+            
+            if (failedCount > 0) {
+                // Schedule chunk recovery which will handle failed chunks
+                backgroundTaskManager.scheduleChunkRecoveryWork()
+                android.util.Log.d("MainActivity", "Scheduled recovery for $failedCount failed chunks")
+            } else {
+                android.util.Log.d("MainActivity", "No failed chunks to retry")
+            }
+            
+            // Also try to resume normal processing
+            startOrderedUpload()
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error retrying failed chunks", e)
+        }
+    }
+
+    /**
+     * Get audio files for a specific session
+     */
+    private fun getSessionAudioFiles(sessionId: String): List<String> {
+        return try {
+            val audioFiles = mutableListOf<String>()
+            val chunksDir = File(filesDir, "audio_chunks/$sessionId")
+            
+            if (chunksDir.exists() && chunksDir.isDirectory) {
+                val files = chunksDir.listFiles { file ->
+                    file.isFile && file.name.endsWith(".wav") && file.name.startsWith("chunk_")
+                }
+                
+                files?.forEach { file ->
+                    if (file.exists() && file.length() > 0) {
+                        audioFiles.add(file.absolutePath)
+                    }
+                }
+                
+                // Sort files by chunk number for proper order
+                audioFiles.sortBy { filePath ->
+                    val fileName = File(filePath).name
+                    val chunkNumber = fileName.removePrefix("chunk_").removeSuffix(".wav").toIntOrNull() ?: 0
+                    chunkNumber
+                }
+            }
+            
+            android.util.Log.d("MainActivity", "Found ${audioFiles.size} audio files for session $sessionId")
+            audioFiles
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error getting session audio files", e)
+            emptyList()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        
+        // Shutdown robust components
+        try {
+            networkMonitor.stopMonitoring()
+            uploadExecutor.shutdown()
+            
+            // Stop background service but keep WorkManager tasks running
+            backgroundTaskManager.stopChunkUploadService()
+            
+            // Don't cancel WorkManager tasks - they should continue in background
+            android.util.Log.d("MainActivity", "MainActivity destroyed, background tasks continue")
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error during cleanup", e)
+        }
+        
+        // Unregister receivers
+        try {
+            chunkProcessingReceiver?.let { unregisterReceiver(it) }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error unregistering chunk processing receiver", e)
+        }
+        
+        try {
+            recordingActionReceiver?.let { unregisterReceiver(it) }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error unregistering recording action receiver", e)
+        }
+        
+        try {
+            networkReceiver?.let { unregisterReceiver(it) }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error unregistering network receiver", e)
+        }
+        
         uploadExecutor.shutdown()
     }
 
