@@ -8,6 +8,11 @@ IOS Loom Video:
 
 
 📚 Link to API documentation
+
 🔧 Link to Postman collection
+
 Flutter version: flutter --version output
+
 Backend deployment URL
+
+Docker setup for backend (docker-compose up)
