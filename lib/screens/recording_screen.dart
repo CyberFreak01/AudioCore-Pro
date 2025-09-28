@@ -13,259 +13,52 @@ class RecordingScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    print('Flutter: Building RecordingScreen');
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Medical Transcription'),
-      ),
+      appBar: AppBar(title: const Text('Medical Transcription')),
       body: SafeArea(
         child: Consumer<RecordingProvider>(
-          builder: (context, recordingProvider, child) {
-            return CustomScrollView(
-              slivers: [
-                SliverPadding(
-                  padding: const EdgeInsets.all(16.0),
-                  sliver: SliverList(
-                    delegate: SliverChildListDelegate([
-                      // Session Info Card
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    'Session Status',
-                                    style: Theme.of(context).textTheme.headlineSmall,
-                                  ),
-                                  if (recordingProvider.currentSessionId != null)
-                                    IconButton(
-                                      onPressed: () => _showShareDialog(context, recordingProvider),
-                                      icon: const Icon(Icons.share),
-                                      tooltip: 'Share Session',
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              _buildInfoRow(context, 'Session ID', recordingProvider.currentSessionId ?? 'None'),
-                              _buildInfoRow(context, 'Status', _getStatusText(recordingProvider.state)),
-                              _buildInfoRow(context, 'Duration', DurationFormatter.formatMinutesSeconds(recordingProvider.recordingDuration)),
-                              _buildInfoRowWithIcon(context, 'Uploaded Chunks', '${recordingProvider.uploadedChunks.length}/${recordingProvider.chunkCounter}', Icons.sync),
-                              if (recordingProvider.isTimerEnabled) ...[
-                                const SizedBox(height: 8),
-                                const Divider(),
-                                const SizedBox(height: 8),
-                                _buildInfoRow(context, 'Timer', DurationFormatter.formatDetailed(recordingProvider.selectedDuration ?? Duration.zero)),
-                                _buildInfoRow(context, 'Remaining', DurationFormatter.formatCountdown(recordingProvider.remainingTime ?? Duration.zero)),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                      
-                      const SizedBox(height: 16),
-                      
-                      // Timer Configuration Card
-                      if (recordingProvider.state == RecordingState.stopped)
-                        Card(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Recording Timer',
-                                  style: Theme.of(context).textTheme.titleLarge,
-                                ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  'Set a duration for automatic recording stop',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 8,
-                                  children: [
-                                    _buildTimerChip(context, recordingProvider, null, 'No Timer'),
-                                    ...AppConstants.timerPresets.map((duration) => 
-                                      _buildTimerChip(context, recordingProvider, duration, DurationFormatter.formatTimerLabel(duration))
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      
-                      const SizedBox(height: 20),
-                      
-                      // Recording Indicator
-                      if (recordingProvider.isRecording)
-                        Card(
-                          color: Theme.of(context).colorScheme.errorContainer,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.radio_button_checked, 
-                                  color: Theme.of(context).colorScheme.onErrorContainer,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'RECORDING IN PROGRESS',
-                                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                          color: Theme.of(context).colorScheme.onErrorContainer,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      if (recordingProvider.isTimerEnabled && recordingProvider.remainingTime != null)
-                                        Text(
-                                          'Time remaining: ${DurationFormatter.formatCountdown(recordingProvider.remainingTime!)}',
-                                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                            color: Theme.of(context).colorScheme.onErrorContainer,
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      
-                      const SizedBox(height: 20),
-                      
-                      // Audio Level + Gain Controls
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Audio Levels',
-                                style: Theme.of(context).textTheme.titleLarge,
-                              ),
-                              const SizedBox(height: 12),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: LinearProgressIndicator(
-                                      value: AudioLevelCalculator.normalizePeakLevel(recordingProvider.peakLevel),
-                                      minHeight: 8,
-                                      backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
-                                      valueColor: AlwaysStoppedAnimation<Color>(
-                                        Theme.of(context).colorScheme.primary,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(context).colorScheme.secondaryContainer,
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Text(
-                                      AudioLevelCalculator.formatRmsDb(recordingProvider.rmsDb),
-                                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                                        color: Theme.of(context).colorScheme.onSecondaryContainer,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 16),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text('Gain', style: Theme.of(context).textTheme.titleMedium),
-                                  Text(
-                                    recordingProvider.gain.toStringAsFixed(2),
-                                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                      color: Theme.of(context).colorScheme.primary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              Slider(
-                                value: recordingProvider.gain.clamp(AppConstants.minGain, AppConstants.maxGain),
-                                min: AppConstants.minGain,
-                                max: AppConstants.maxGain,
-                                divisions: AppConstants.gainDivisions,
-                                label: recordingProvider.gain.toStringAsFixed(2),
-                                onChanged: (v) => recordingProvider.setGain(v),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 20),
-
-                      // Status Message (Error/Info)
-                      if (recordingProvider.errorMessage != null)
-                        Card(
-                          color: _getMessageCardColor(context, recordingProvider.errorMessage!),
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  _getMessageIcon(recordingProvider.errorMessage!),
-                                  color: _getMessageTextColor(context, recordingProvider.errorMessage!),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    recordingProvider.errorMessage!,
-                                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                      color: _getMessageTextColor(context, recordingProvider.errorMessage!),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      
-                      // Add spacing before bottom controls
-                      const SizedBox(height: 40),
-                      
-                      // Control Buttons
-                      _buildControlButtons(context, recordingProvider),
-                      
-                      const SizedBox(height: 20),
-                      
-                      // Session Management Button
-                      FilledButton.tonalIcon(
-                        onPressed: () => _showSessionsDialog(context),
-                        icon: const Icon(Icons.list),
-                        label: const Text('View All Sessions'),
-                      ),
-                      
-                      // Bottom padding for safe area and navigation
-                      SizedBox(height: MediaQuery.of(context).padding.bottom + 20),
-                    ]),
-                  ),
-                ),
-              ],
-            );
-          },
+          builder: (context, provider, _) => _buildBody(context, provider),
         ),
       ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context, RecordingProvider provider) {
+    return CustomScrollView(
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.all(16.0),
+          sliver: SliverList(
+            delegate: SliverChildListDelegate([
+              _SessionInfoCard(provider: provider, onShare: () => _showShareDialog(context, provider)),
+              const SizedBox(height: 16),
+              if (provider.state == RecordingState.stopped) ...[
+                _TimerConfigCard(provider: provider),
+                const SizedBox(height: 20),
+              ],
+              if (provider.isRecording) ...[
+                _RecordingIndicatorCard(provider: provider),
+                const SizedBox(height: 20),
+              ],
+              _AudioLevelsCard(provider: provider),
+              const SizedBox(height: 20),
+              if (provider.errorMessage != null) ...[
+                _StatusMessageCard(message: provider.errorMessage!),
+                const SizedBox(height: 20),
+              ],
+              const SizedBox(height: 20),
+              _buildControlButtons(context, provider),
+              const SizedBox(height: 20),
+              FilledButton.tonalIcon(
+                onPressed: () => _showSessionsDialog(context),
+                icon: const Icon(Icons.list),
+                label: const Text('View All Sessions'),
+              ),
+              SizedBox(height: MediaQuery.of(context).padding.bottom + 20),
+            ]),
+          ),
+        ),
+      ],
     );
   }
 
@@ -597,11 +390,277 @@ class RecordingScreen extends StatelessWidget {
     );
   }
 
-  String _getStatusText(RecordingState state) {
-    return state.displayName;
+}
+
+class _SessionInfoCard extends StatelessWidget {
+  final RecordingProvider provider;
+  final VoidCallback onShare;
+
+  const _SessionInfoCard({required this.provider, required this.onShare});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Session Status', style: Theme.of(context).textTheme.headlineSmall),
+                if (provider.currentSessionId != null)
+                  IconButton(
+                    onPressed: onShare,
+                    icon: const Icon(Icons.share),
+                    tooltip: 'Share Session',
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _InfoRow(label: 'Session ID', value: provider.currentSessionId ?? 'None'),
+            _InfoRow(label: 'Status', value: provider.state.displayName),
+            _InfoRow(label: 'Duration', value: DurationFormatter.formatMinutesSeconds(provider.recordingDuration)),
+            _InfoRowWithIcon(
+              label: 'Uploaded Chunks', 
+              value: '${provider.uploadedChunks.length}/${provider.chunkCounter}', 
+              icon: Icons.sync
+            ),
+            if (provider.isTimerEnabled) ...[
+              const SizedBox(height: 8),
+              const Divider(),
+              const SizedBox(height: 8),
+              _InfoRow(label: 'Timer', value: DurationFormatter.formatDetailed(provider.selectedDuration ?? Duration.zero)),
+              _InfoRow(label: 'Remaining', value: DurationFormatter.formatCountdown(provider.remainingTime ?? Duration.zero)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TimerConfigCard extends StatelessWidget {
+  final RecordingProvider provider;
+
+  const _TimerConfigCard({required this.provider});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Recording Timer', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            Text(
+              'Set a duration for automatic recording stop',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _TimerChip(provider: provider, duration: null, label: 'No Timer'),
+                ...AppConstants.timerPresets.map((duration) => 
+                  _TimerChip(provider: provider, duration: duration, label: DurationFormatter.formatTimerLabel(duration))
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RecordingIndicatorCard extends StatelessWidget {
+  final RecordingProvider provider;
+
+  const _RecordingIndicatorCard({required this.provider});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: Theme.of(context).colorScheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(
+              Icons.radio_button_checked, 
+              color: Theme.of(context).colorScheme.onErrorContainer,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'RECORDING IN PROGRESS',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  if (provider.isTimerEnabled && provider.remainingTime != null)
+                    Text(
+                      'Time remaining: ${DurationFormatter.formatCountdown(provider.remainingTime!)}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AudioLevelsCard extends StatelessWidget {
+  final RecordingProvider provider;
+
+  const _AudioLevelsCard({required this.provider});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Audio Levels', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: LinearProgressIndicator(
+                    value: AudioLevelCalculator.normalizePeakLevel(provider.peakLevel),
+                    minHeight: 8,
+                    backgroundColor: Theme.of(context).colorScheme.surfaceVariant,
+                    valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).colorScheme.primary),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    AudioLevelCalculator.formatRmsDb(provider.rmsDb),
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Gain', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  provider.gain.toStringAsFixed(2),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Slider(
+              value: provider.gain.clamp(AppConstants.minGain, AppConstants.maxGain),
+              min: AppConstants.minGain,
+              max: AppConstants.maxGain,
+              divisions: AppConstants.gainDivisions,
+              label: provider.gain.toStringAsFixed(2),
+              onChanged: (v) => provider.setGain(v),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusMessageCard extends StatelessWidget {
+  final String message;
+
+  const _StatusMessageCard({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: _getCardColor(context, message),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(
+              _getIcon(message),
+              color: _getTextColor(context, message),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: _getTextColor(context, message),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  Widget _buildInfoRow(BuildContext context, String label, String value) {
+  Color _getCardColor(BuildContext context, String message) {
+    if (message.contains('permission')) return Theme.of(context).colorScheme.primaryContainer;
+    if (message.contains('auto-paused')) return Theme.of(context).colorScheme.secondaryContainer;
+    if (message.contains('Microphone')) return Theme.of(context).colorScheme.tertiaryContainer;
+    return Theme.of(context).colorScheme.errorContainer;
+  }
+
+  IconData _getIcon(String message) {
+    if (message.contains('permission')) return Icons.mic_off;
+    if (message.contains('Microphone acquired')) return Icons.mic_external_on;
+    if (message.contains('Microphone')) return Icons.mic_none;
+    if (message.contains('auto-paused')) return Icons.phone;
+    if (message.contains('Incoming call')) return Icons.phone_in_talk;
+    if (message.contains('Call in progress')) return Icons.call;
+    return Icons.warning;
+  }
+
+  Color _getTextColor(BuildContext context, String message) {
+    if (message.contains('permission')) return Theme.of(context).colorScheme.onPrimaryContainer;
+    if (message.contains('auto-paused')) return Theme.of(context).colorScheme.onSecondaryContainer;
+    if (message.contains('Microphone')) return Theme.of(context).colorScheme.onTertiaryContainer;
+    return Theme.of(context).colorScheme.onErrorContainer;
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _InfoRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
@@ -623,8 +682,17 @@ class RecordingScreen extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _buildInfoRowWithIcon(BuildContext context, String label, String value, IconData icon) {
+class _InfoRowWithIcon extends StatelessWidget {
+  final String label;
+  final String value;
+  final IconData icon;
+
+  const _InfoRowWithIcon({required this.label, required this.value, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
@@ -633,11 +701,7 @@ class RecordingScreen extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                icon,
-                size: 16,
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+              Icon(icon, size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
               const SizedBox(width: 6),
               Text(
                 label,
@@ -657,63 +721,25 @@ class RecordingScreen extends StatelessWidget {
       ),
     );
   }
+}
 
-  Widget _buildTimerChip(BuildContext context, RecordingProvider provider, Duration? duration, String label) {
+class _TimerChip extends StatelessWidget {
+  final RecordingProvider provider;
+  final Duration? duration;
+  final String label;
+
+  const _TimerChip({required this.provider, required this.duration, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
     final isSelected = provider.selectedDuration == duration;
     
     return FilterChip(
       label: Text(label),
       selected: isSelected,
-      onSelected: (selected) {
-        provider.setTimerDuration(selected ? duration : null);
-      },
+      onSelected: (selected) => provider.setTimerDuration(selected ? duration : null),
       selectedColor: Theme.of(context).colorScheme.primaryContainer,
       checkmarkColor: Theme.of(context).colorScheme.onPrimaryContainer,
     );
-  }
-
-  /// Get appropriate card color for different message types
-  Color _getMessageCardColor(BuildContext context, String message) {
-    if (message.contains('permission')) {
-      return Theme.of(context).colorScheme.primaryContainer;
-    } else if (message.contains('auto-paused')) {
-      return Theme.of(context).colorScheme.secondaryContainer;
-    } else if (message.contains('Microphone')) {
-      return Theme.of(context).colorScheme.tertiaryContainer;
-    } else {
-      return Theme.of(context).colorScheme.errorContainer;
-    }
-  }
-
-  /// Get appropriate icon for different message types
-  IconData _getMessageIcon(String message) {
-    if (message.contains('permission')) {
-      return Icons.mic_off;
-    } else if (message.contains('Microphone acquired')) {
-      return Icons.mic_external_on;
-    } else if (message.contains('Microphone')) {
-      return Icons.mic_none;
-    } else if (message.contains('auto-paused')) {
-      return Icons.phone;
-    } else if (message.contains('Incoming call')) {
-      return Icons.phone_in_talk;
-    } else if (message.contains('Call in progress')) {
-      return Icons.call;
-    } else {
-      return Icons.warning;
-    }
-  }
-
-  /// Get appropriate text color for different message types
-  Color _getMessageTextColor(BuildContext context, String message) {
-    if (message.contains('permission')) {
-      return Theme.of(context).colorScheme.onPrimaryContainer;
-    } else if (message.contains('auto-paused')) {
-      return Theme.of(context).colorScheme.onSecondaryContainer;
-    } else if (message.contains('Microphone')) {
-      return Theme.of(context).colorScheme.onTertiaryContainer;
-    } else {
-      return Theme.of(context).colorScheme.onErrorContainer;
-    }
   }
 }
